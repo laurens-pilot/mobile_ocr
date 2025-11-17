@@ -47,7 +47,9 @@ class TextDetectorController extends ChangeNotifier {
       return;
     }
     _state = state;
-    notifyListeners();
+    scheduleMicrotask(() {
+      notifyListeners();
+    });
   }
 
   void _detach(_TextDetectorWidgetState state) {
