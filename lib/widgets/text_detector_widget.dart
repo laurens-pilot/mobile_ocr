@@ -14,7 +14,6 @@ const double _enteSelectionHighlightOpacity = 0.28;
 /// Collection of user-facing strings used by [TextDetectorWidget].
 class TextDetectorStrings {
   final String processingOverlayMessage;
-  final String loadingIndicatorLabel;
   final String selectionHint;
   final String noTextDetected;
   final String retryButtonLabel;
@@ -26,7 +25,6 @@ class TextDetectorStrings {
 
   const TextDetectorStrings({
     this.processingOverlayMessage = 'Detecting text...',
-    this.loadingIndicatorLabel = 'Detecting Text',
     this.selectionHint = 'Swipe or double tap to select just what you need',
     this.noTextDetected = 'No text detected',
     this.retryButtonLabel = 'Retry',
@@ -95,9 +93,6 @@ class TextDetectorWidget extends StatefulWidget {
   /// Whether to auto-detect text on load
   final bool autoDetect;
 
-  /// Custom loading widget
-  final Widget? loadingWidget;
-
   /// Background color
   final Color backgroundColor;
 
@@ -122,7 +117,6 @@ class TextDetectorWidget extends StatefulWidget {
     this.onTextCopied,
     this.onTextBlocksSelected,
     this.autoDetect = true,
-    this.loadingWidget,
     this.backgroundColor = Colors.transparent,
     this.showUnselectedBoundaries = true,
     this.enableSelectionPreview = false,
@@ -364,8 +358,6 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
       fit: StackFit.expand,
       children: [
         _buildImageLayer(),
-        if (_imageFile == null && widget.loadingWidget != null)
-          Center(child: widget.loadingWidget),
         if (_isProcessing && _detectedTextBlocks == null)
           _buildProcessingOverlay(),
         if (_showEditorHint &&
