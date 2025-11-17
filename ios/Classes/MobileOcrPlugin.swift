@@ -25,6 +25,15 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             handleTextDetection(call: call, result: result)
         case "hasText":
             handleQuickTextCheck(call: call, result: result)
+        case "ensureImageIsDisplayable":
+            guard let arguments = call.arguments as? [String: Any],
+                  let imagePath = arguments["imagePath"] as? String else {
+                result(FlutterError(code: "INVALID_ARGUMENTS",
+                                    message: "Image path is required",
+                                    details: nil))
+                return
+            }
+            result(imagePath)
         default:
             result(FlutterMethodNotImplemented)
         }
