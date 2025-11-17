@@ -35,6 +35,7 @@ class OcrDemoPage extends StatefulWidget {
 class _OcrDemoPageState extends State<OcrDemoPage> {
   static const List<String> _testImageAssets = <String>[
     'assets/test_ocr/bob_ios_detection_issue.JPEG',
+    'assets/test_ocr/heic_test.HEIC',
     'assets/test_ocr/mail_screenshot.jpeg',
     'assets/test_ocr/meme_ice_cream.jpeg',
     'assets/test_ocr/meme_love_you.jpeg',
