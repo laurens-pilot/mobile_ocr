@@ -14,6 +14,9 @@ import io.flutter.plugin.common.MethodChannel.Result
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.File
+import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.Locale
 
 /** MobileOcrPlugin */
@@ -31,6 +34,15 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   private var cachedModelFiles: ModelFiles? = null
   private val modelMutex = Mutex()
   private val processorMutex = Mutex()
+  private val displayableImageCache = mutableMapOf<String, ImageCacheEntry>()
+
+  private data class ImageCacheEntry(
+    val cachedPath: String,
+    val sourceModified: Long,
+    val sourceSize: Long
+  )
+
+  private val transcodableExtensions = setOf("heic", "heif", "heics", "avif")
 
   override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     channel = MethodChannel(flutterPluginBinding.binaryMessenger, "mobile_ocr")
@@ -126,6 +138,24 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
       "getPlatformVersion" -> {
         result.success("Android ${android.os.Build.VERSION.RELEASE}")
       }
+      "ensureImageIsDisplayable" -> {
+        val imagePath = call.argument<String>("imagePath")
+        if (imagePath.isNullOrBlank()) {
+          result.error("INVALID_ARGUMENT", "Image path is required", null)
+          return
+        }
+        mainScope.launch {
+          try {
+            val resolvedPath = withContext(Dispatchers.IO) {
+              ensureImageIsDisplayable(imagePath)
+            }
+            result.success(resolvedPath)
+          } catch (e: Exception) {
+            Log.e(TAG, "Failed to prepare displayable image for $imagePath", e)
+            result.error("IMAGE_DECODE_ERROR", e.message ?: "Could not decode image", null)
+          }
+        }
+      }
       else -> {
         result.notImplemented()
       }
@@ -198,6 +228,69 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     return processor.hasHighConfidenceText(correctedBitmap, minDetectionConfidence)
   }
 
+  private fun ensureImageIsDisplayable(imagePath: String): String {
+    val file = File(imagePath)
+    if (!file.exists()) {
+      throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+    }
+
+    val extension = file.extension.lowercase(Locale.US)
+    if (extension.isEmpty() || !transcodableExtensions.contains(extension)) {
+      return imagePath
+    }
+
+    val lastModified = file.lastModified()
+    val size = file.length()
+    val cacheKey = file.absolutePath
+
+    displayableImageCache[cacheKey]?.let { entry ->
+      val cachedFile = File(entry.cachedPath)
+      if (
+        entry.sourceModified == lastModified &&
+        entry.sourceSize == size &&
+        cachedFile.exists()
+      ) {
+        return entry.cachedPath
+      }
+    }
+
+    val bitmap = BitmapFactory.decodeFile(imagePath)
+        ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
+    val correctedBitmap = applyExifOrientation(bitmap, imagePath)
+
+    val cacheDir = File(context.cacheDir, "mobile_ocr_display").apply {
+      if (!exists()) {
+        mkdirs()
+      }
+    }
+    val digestInput = "$cacheKey:$lastModified:$size"
+    val hash = MessageDigest.getInstance("MD5").digest(digestInput.toByteArray())
+      .joinToString("") { "%02x".format(it) }
+    val cacheFile = File(cacheDir, "img_$hash.png")
+
+    FileOutputStream(cacheFile).use { stream ->
+      val success = correctedBitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+      if (!success) {
+        throw IllegalStateException("Failed to encode PNG for $imagePath")
+      }
+    }
+
+    if (correctedBitmap != bitmap && !bitmap.isRecycled) {
+      bitmap.recycle()
+    }
+    if (!correctedBitmap.isRecycled) {
+      correctedBitmap.recycle()
+    }
+
+    displayableImageCache[cacheKey] = ImageCacheEntry(
+      cachedPath = cacheFile.absolutePath,
+      sourceModified = lastModified,
+      sourceSize = size
+    )
+
+    return cacheFile.absolutePath
+  }
+
   private fun applyExifOrientation(source: Bitmap, imagePath: String): Bitmap {
     return runCatching {
       val exif = ExifInterface(imagePath)
@@ -249,6 +342,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         cachedModelFiles = null
       }
     }
+    displayableImageCache.clear()
   }
 
   private suspend fun getModelFiles(): ModelFiles {

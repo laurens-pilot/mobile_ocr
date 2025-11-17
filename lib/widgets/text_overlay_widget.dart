@@ -13,6 +13,39 @@ const double _kHighlightVerticalPadding = 1.6;
 const double _kHighlightCornerRadius = 4.0;
 const double _kHighlightLineToleranceFactor = 0.7;
 
+/// Controller that surfaces imperative actions for [TextOverlayWidget].
+class TextOverlayController {
+  _TextOverlayWidgetState? _state;
+
+  void _attach(_TextOverlayWidgetState state) {
+    _state = state;
+  }
+
+  void _detach(_TextOverlayWidgetState state) {
+    if (_state == state) {
+      _state = null;
+    }
+  }
+
+  /// Attempts to select every recognized text block.
+  bool selectAllText() {
+    final state = _state;
+    if (state == null) {
+      return false;
+    }
+    return state._selectAllText();
+  }
+
+  /// Whether there is any recognized text to select.
+  bool get hasSelectableText {
+    final state = _state;
+    if (state == null) {
+      return false;
+    }
+    return state._hasSelectableText;
+  }
+}
+
 /// A widget that overlays detected text on top of the source image while
 /// providing an editor-like selection experience.
 class TextOverlayWidget extends StatefulWidget {
@@ -24,6 +57,7 @@ class TextOverlayWidget extends StatefulWidget {
   final bool showUnselectedBoundaries;
   final bool enableSelectionPreview;
   final bool debugMode;
+  final TextOverlayController? controller;
 
   const TextOverlayWidget({
     super.key,
@@ -35,6 +69,7 @@ class TextOverlayWidget extends StatefulWidget {
     this.showUnselectedBoundaries = true,
     this.enableSelectionPreview = false,
     this.debugMode = false,
+    this.controller,
   });
 
   @override
@@ -78,6 +113,15 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
 
   final Map<int, _BlockVisual> _blockVisuals = <int, _BlockVisual>{};
   final List<int> _blockOrder = <int>[];
+  bool get _hasSelectableText {
+    for (final index in _blockOrder) {
+      final visual = _blockVisuals[index];
+      if (visual != null && visual.characterCount > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   Map<int, TextSelection> _activeSelections = <int, TextSelection>{};
   _SelectionAnchor? _baseAnchor;
@@ -98,12 +142,17 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
   @override
   void initState() {
     super.initState();
+    widget.controller?._attach(this);
     _loadImageDimensions();
   }
 
   @override
   void didUpdateWidget(covariant TextOverlayWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?._detach(this);
+      widget.controller?._attach(this);
+    }
 
     if (oldWidget.imageFile.path != widget.imageFile.path) {
       _resetForNewImage();
@@ -183,6 +232,7 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
 
   @override
   void dispose() {
+    widget.controller?._detach(this);
     _transformController.dispose();
     super.dispose();
   }
@@ -1839,9 +1889,9 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
     });
   }
 
-  void _selectAllText() {
+  bool _selectAllText() {
     if (_blockOrder.isEmpty) {
-      return;
+      return false;
     }
 
     final Map<int, TextSelection> selections = <int, TextSelection>{};
@@ -1863,7 +1913,8 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
     }
 
     if (selections.isEmpty || firstIndex == null || lastIndex == null) {
-      return;
+      _clearSelection();
+      return false;
     }
 
     final int first = firstIndex;
@@ -1882,6 +1933,7 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
 
     HapticFeedback.selectionClick();
     _notifySelection();
+    return true;
   }
 
   void _clearSelection() {

@@ -35,6 +35,7 @@ class OcrDemoPage extends StatefulWidget {
 class _OcrDemoPageState extends State<OcrDemoPage> {
   static const List<String> _testImageAssets = <String>[
     'assets/test_ocr/bob_ios_detection_issue.JPEG',
+    'assets/test_ocr/heic_test.HEIC',
     'assets/test_ocr/mail_screenshot.jpeg',
     'assets/test_ocr/meme_ice_cream.jpeg',
     'assets/test_ocr/meme_love_you.jpeg',
@@ -49,6 +50,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
 
   final ImagePicker _picker = ImagePicker();
   final MobileOcr _mobileOcr = MobileOcr();
+  final TextDetectorController _textDetectorController =
+      TextDetectorController();
   final Map<String, String> _cachedAssetPaths = <String, String>{};
   Directory? _assetCacheDirectory;
   String? _imagePath;
@@ -59,11 +62,34 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   bool _isLoadingTestImage = false;
 
   @override
+  void dispose() {
+    _textDetectorController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Mobile OCR'),
         actions: [
+          if (_imagePath != null)
+            AnimatedBuilder(
+              animation: _textDetectorController,
+              builder: (context, _) {
+                final isReady = _textDetectorController.hasSelectableText &&
+                    !_textDetectorController.isProcessing;
+                return IconButton(
+                  tooltip: isReady
+                      ? 'Select all recognized text'
+                      : 'Detecting text...',
+                  icon: const Icon(Icons.select_all_outlined),
+                  onPressed: isReady
+                      ? () => _handleSelectAllText(context)
+                      : null,
+                );
+              },
+            ),
           if (_imagePath != null)
             IconButton(
               tooltip: 'Clear image',
@@ -88,6 +114,7 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
                     imagePath: _imagePath!,
                     debugMode: true,
                     enableSelectionPreview: true,
+                    controller: _textDetectorController,
                     onTextCopied: (text) => _showSnackBar(
                       context,
                       text.isEmpty
@@ -111,6 +138,15 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
         ],
       ),
     );
+  }
+
+  void _handleSelectAllText(BuildContext context) {
+    final didSelect = _textDetectorController.selectAllText();
+    if (!didSelect) {
+      _showSnackBar(context, 'Text not ready yet');
+      return;
+    }
+    _showSnackBar(context, 'Selected all recognized text');
   }
 
   Widget _buildPlaceholder(BuildContext context) {

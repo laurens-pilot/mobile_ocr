@@ -5,6 +5,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_ocr/mobile_ocr_plugin.dart';
 import 'package:mobile_ocr/models/text_block.dart';
+import 'package:mobile_ocr/src/display_image_helper.dart';
 import 'package:mobile_ocr/widgets/text_overlay_widget.dart';
 
 const Color _entePrimaryColor = Color(0xFF1DB954);
@@ -36,6 +37,47 @@ class TextDetectorStrings {
     this.imageDecodeFailedError = 'Could not read image file',
     this.genericDetectError = 'Could not detect text in image',
   });
+}
+
+/// Controller that surfaces imperative actions for [TextDetectorWidget].
+class TextDetectorController extends ChangeNotifier {
+  _TextDetectorWidgetState? _state;
+
+  void _attach(_TextDetectorWidgetState state) {
+    if (identical(_state, state)) {
+      return;
+    }
+    _state = state;
+    scheduleMicrotask(() {
+      notifyListeners();
+    });
+  }
+
+  void _detach(_TextDetectorWidgetState state) {
+    if (identical(_state, state)) {
+      _state = null;
+      notifyListeners();
+    }
+  }
+
+  void _notifyStateChanged() {
+    notifyListeners();
+  }
+
+  /// Whether text detection is currently running.
+  bool get isProcessing => _state?._isProcessing ?? false;
+
+  /// Indicates if there is text that can be selected.
+  bool get hasSelectableText => _state?._hasSelectableText ?? false;
+
+  /// Programmatically select all recognized text.
+  bool selectAllText() {
+    final state = _state;
+    if (state == null) {
+      return false;
+    }
+    return state._selectAllRecognizedText();
+  }
 }
 
 /// A complete text detection widget that displays an image and allows
@@ -71,6 +113,9 @@ class TextDetectorWidget extends StatefulWidget {
   /// Strings used for user-facing text in the widget.
   final TextDetectorStrings strings;
 
+  /// Controller for imperative text selection actions.
+  final TextDetectorController? controller;
+
   const TextDetectorWidget({
     super.key,
     required this.imagePath,
@@ -83,6 +128,7 @@ class TextDetectorWidget extends StatefulWidget {
     this.enableSelectionPreview = false,
     this.debugMode = false,
     this.strings = const TextDetectorStrings(),
+    this.controller,
   });
 
   @override
@@ -91,9 +137,11 @@ class TextDetectorWidget extends StatefulWidget {
 
 class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   final MobileOcr _ocr = MobileOcr();
+  final TextOverlayController _textOverlayController = TextOverlayController();
   List<TextBlock>? _detectedTextBlocks;
   bool _isProcessing = false;
   File? _imageFile;
+  String? _resolvedImagePath;
   bool _isFileReady = false;
   bool _modelsReady = false;
   Future<void>? _modelPreparation;
@@ -101,48 +149,78 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   Timer? _editorHintTimer;
   bool _showEditorHint = false;
   bool _isNetworkError = false;
+  bool get _hasSelectableText =>
+      _detectedTextBlocks != null && _detectedTextBlocks!.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
+    widget.controller?._attach(this);
     // Set initial processing state if auto-detecting
     if (widget.autoDetect) {
       _isProcessing = true;
     }
     // Schedule file initialization after first frame to ensure immediate rendering
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _initializeFile();
+      if (!mounted) return;
+      unawaited(_initializeFile());
     });
   }
 
   @override
   void dispose() {
     _editorHintTimer?.cancel();
+    widget.controller?._detach(this);
     super.dispose();
   }
 
-  void _initializeFile() {
-    // Create file reference (this is just a reference, not actual loading)
-    final file = File(widget.imagePath);
-
-    if (!mounted) return;
-
+  Future<void> _initializeFile() async {
+    final requestedPath = widget.imagePath;
     _editorHintTimer?.cancel();
 
     setState(() {
-      _imageFile = file;
-      _isFileReady = true;
+      _imageFile = null;
+      _resolvedImagePath = null;
+      _isFileReady = false;
       _showEditorHint = false;
+      _errorMessage = null;
     });
 
-    // Now that file is ready, start detection if needed
-    if (widget.autoDetect) {
-      _preloadImageAndDetect();
-    } else {
-      // Preload image even when not auto-detecting
-      if (mounted) {
+    try {
+      final resolvedPath = await DisplayImageHelper.ensureDisplayablePath(
+        requestedPath,
+      );
+      if (!mounted || widget.imagePath != requestedPath) {
+        return;
+      }
+      final file = File(resolvedPath);
+      if (!file.existsSync()) {
+        throw Exception('Image file not found after normalization');
+      }
+
+      setState(() {
+        _imageFile = file;
+        _resolvedImagePath = resolvedPath;
+        _isFileReady = true;
+      });
+
+      if (widget.autoDetect) {
+        _preloadImageAndDetect();
+      } else {
         precacheImage(FileImage(file), context);
       }
+    } catch (error) {
+      debugPrint('Failed to prepare image $requestedPath: $error');
+      if (!mounted || widget.imagePath != requestedPath) {
+        return;
+      }
+      setState(() {
+        _imageFile = null;
+        _resolvedImagePath = null;
+        _isFileReady = false;
+        _errorMessage = widget.strings.imageDecodeFailedError;
+        _isProcessing = false;
+      });
     }
   }
 
@@ -157,6 +235,10 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   @override
   void didUpdateWidget(covariant TextDetectorWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?._detach(this);
+      widget.controller?._attach(this);
+    }
     if (oldWidget.imagePath != widget.imagePath) {
       setState(() {
         _isProcessing = widget.autoDetect;
@@ -166,7 +248,8 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
         _errorMessage = null;
         _isNetworkError = false;
       });
-      _initializeFile();
+      _notifyController();
+      unawaited(_initializeFile());
     }
   }
 
@@ -202,7 +285,8 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   }
 
   Future<void> _detectText() async {
-    final String imagePath = widget.imagePath;
+    final String requestedPath = widget.imagePath;
+    final String imagePath = _resolvedImagePath ?? requestedPath;
 
     // Don't set processing true here if already processing
     if (!_isProcessing) {
@@ -212,6 +296,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
         _errorMessage = null;
         _isNetworkError = false;
       });
+      _notifyController();
     }
 
     try {
@@ -222,16 +307,17 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
 
       final blocks = await _ocr.detectText(imagePath: imagePath);
 
-      if (mounted && widget.imagePath == imagePath) {
+      if (mounted && widget.imagePath == requestedPath) {
         setState(() {
           _detectedTextBlocks = blocks;
           _errorMessage = null;
         });
+        _notifyController();
         _handleEditorHint(blocks);
       }
     } catch (e) {
       debugPrint('Error detecting text: $e');
-      if (mounted && widget.imagePath == imagePath) {
+      if (mounted && widget.imagePath == requestedPath) {
         setState(() {
           // Show user-friendly message based on error type
           final errorStr = e.toString().toLowerCase();
@@ -245,12 +331,14 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
             _errorMessage = widget.strings.genericDetectError;
           }
         });
+        _notifyController();
       }
     } finally {
-      if (mounted && widget.imagePath == imagePath) {
+      if (mounted && widget.imagePath == requestedPath) {
         setState(() {
           _isProcessing = false;
         });
+        _notifyController();
       }
     }
   }
@@ -264,7 +352,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
         children: [
           _buildImageView(),
           // Show processing indicator on top of image when detecting text
-          if (_isFileReady && _isProcessing && _detectedTextBlocks == null)
+          if (_isProcessing && _detectedTextBlocks == null)
             Positioned(
               top: 100,
               left: 0,
@@ -403,7 +491,8 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   Widget _buildImageView() {
     // Show loading if file is not ready yet
     if (!_isFileReady || _imageFile == null) {
-      return _buildLoadingIndicator();
+      return widget.loadingWidget ??
+          Container(color: widget.backgroundColor);
     }
 
     if (_detectedTextBlocks != null) {
@@ -429,6 +518,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
           showUnselectedBoundaries: widget.showUnselectedBoundaries,
           enableSelectionPreview: widget.enableSelectionPreview,
           debugMode: widget.debugMode,
+          controller: _textOverlayController,
         ),
       );
     }
@@ -460,52 +550,6 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
               child: child,
             );
           },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildLoadingIndicator() {
-    if (widget.loadingWidget != null) {
-      return widget.loadingWidget!;
-    }
-
-    return Center(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.85),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: CupertinoColors.activeBlue.withValues(alpha: 0.3),
-            width: 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: CupertinoColors.activeBlue.withValues(alpha: 0.2),
-              blurRadius: 20,
-              spreadRadius: 2,
-            ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CupertinoActivityIndicator(
-              radius: 14,
-              color: CupertinoColors.activeBlue,
-            ),
-            const SizedBox(width: 12),
-            Text(
-              widget.strings.loadingIndicatorLabel,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                letterSpacing: -0.5,
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -629,4 +673,15 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
 
   /// Check if text detection is currently processing
   bool get isProcessing => _isProcessing;
+
+  bool _selectAllRecognizedText() {
+    if (!_hasSelectableText) {
+      return false;
+    }
+    return _textOverlayController.selectAllText();
+  }
+
+  void _notifyController() {
+    widget.controller?._notifyStateChanged();
+  }
 }
