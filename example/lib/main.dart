@@ -106,23 +106,7 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
       ),
       body: Column(
         children: [
-          Expanded(
-            child: _imagePath == null
-                ? _buildPlaceholder(context)
-                : TextDetectorWidget(
-                    key: ValueKey(_imagePath),
-                    imagePath: _imagePath!,
-                    debugMode: true,
-                    enableSelectionPreview: true,
-                    controller: _textDetectorController,
-                    onTextCopied: (text) => _showSnackBar(
-                      context,
-                      text.isEmpty
-                          ? 'Copied empty text'
-                          : 'Copied text (${text.length} chars)',
-                    ),
-                  ),
-          ),
+          Expanded(child: _buildImageStage(context)),
           if (_lastHasTextResult != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -169,6 +153,48 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildImageStage(BuildContext context) {
+    final path = _imagePath;
+    if (path == null) {
+      return _buildPlaceholder(context);
+    }
+
+    return AnimatedBuilder(
+      animation: _textDetectorController,
+      builder: (context, _) {
+        final showBaseImage =
+            !_textDetectorController.hasSelectableText ||
+            _textDetectorController.isProcessing;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            if (showBaseImage)
+              Positioned.fill(
+                child: Image.file(
+                  File(path),
+                  fit: BoxFit.contain,
+                ),
+              ),
+            TextDetectorWidget(
+              key: ValueKey(path),
+              imagePath: path,
+              backgroundColor: Colors.transparent,
+              debugMode: true,
+              enableSelectionPreview: true,
+              controller: _textDetectorController,
+              onTextCopied: (text) => _showSnackBar(
+                context,
+                text.isEmpty
+                    ? 'Copied empty text'
+                    : 'Copied text (${text.length} chars)',
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
