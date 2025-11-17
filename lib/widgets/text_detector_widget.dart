@@ -38,6 +38,45 @@ class TextDetectorStrings {
   });
 }
 
+/// Controller that surfaces imperative actions for [TextDetectorWidget].
+class TextDetectorController extends ChangeNotifier {
+  _TextDetectorWidgetState? _state;
+
+  void _attach(_TextDetectorWidgetState state) {
+    if (identical(_state, state)) {
+      return;
+    }
+    _state = state;
+    notifyListeners();
+  }
+
+  void _detach(_TextDetectorWidgetState state) {
+    if (identical(_state, state)) {
+      _state = null;
+      notifyListeners();
+    }
+  }
+
+  void _notifyStateChanged() {
+    notifyListeners();
+  }
+
+  /// Whether text detection is currently running.
+  bool get isProcessing => _state?._isProcessing ?? false;
+
+  /// Indicates if there is text that can be selected.
+  bool get hasSelectableText => _state?._hasSelectableText ?? false;
+
+  /// Programmatically select all recognized text.
+  bool selectAllText() {
+    final state = _state;
+    if (state == null) {
+      return false;
+    }
+    return state._selectAllRecognizedText();
+  }
+}
+
 /// A complete text detection widget that displays an image and allows
 /// users to select and copy detected text.
 class TextDetectorWidget extends StatefulWidget {
@@ -71,6 +110,9 @@ class TextDetectorWidget extends StatefulWidget {
   /// Strings used for user-facing text in the widget.
   final TextDetectorStrings strings;
 
+  /// Controller for imperative text selection actions.
+  final TextDetectorController? controller;
+
   const TextDetectorWidget({
     super.key,
     required this.imagePath,
@@ -83,6 +125,7 @@ class TextDetectorWidget extends StatefulWidget {
     this.enableSelectionPreview = false,
     this.debugMode = false,
     this.strings = const TextDetectorStrings(),
+    this.controller,
   });
 
   @override
@@ -91,6 +134,7 @@ class TextDetectorWidget extends StatefulWidget {
 
 class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   final MobileOcr _ocr = MobileOcr();
+  final TextOverlayController _textOverlayController = TextOverlayController();
   List<TextBlock>? _detectedTextBlocks;
   bool _isProcessing = false;
   File? _imageFile;
@@ -101,10 +145,13 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   Timer? _editorHintTimer;
   bool _showEditorHint = false;
   bool _isNetworkError = false;
+  bool get _hasSelectableText =>
+      _detectedTextBlocks != null && _detectedTextBlocks!.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
+    widget.controller?._attach(this);
     // Set initial processing state if auto-detecting
     if (widget.autoDetect) {
       _isProcessing = true;
@@ -118,6 +165,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   @override
   void dispose() {
     _editorHintTimer?.cancel();
+    widget.controller?._detach(this);
     super.dispose();
   }
 
@@ -157,6 +205,10 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   @override
   void didUpdateWidget(covariant TextDetectorWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?._detach(this);
+      widget.controller?._attach(this);
+    }
     if (oldWidget.imagePath != widget.imagePath) {
       setState(() {
         _isProcessing = widget.autoDetect;
@@ -166,6 +218,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
         _errorMessage = null;
         _isNetworkError = false;
       });
+      _notifyController();
       _initializeFile();
     }
   }
@@ -212,6 +265,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
         _errorMessage = null;
         _isNetworkError = false;
       });
+      _notifyController();
     }
 
     try {
@@ -227,6 +281,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
           _detectedTextBlocks = blocks;
           _errorMessage = null;
         });
+        _notifyController();
         _handleEditorHint(blocks);
       }
     } catch (e) {
@@ -245,12 +300,14 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
             _errorMessage = widget.strings.genericDetectError;
           }
         });
+        _notifyController();
       }
     } finally {
       if (mounted && widget.imagePath == imagePath) {
         setState(() {
           _isProcessing = false;
         });
+        _notifyController();
       }
     }
   }
@@ -429,6 +486,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
           showUnselectedBoundaries: widget.showUnselectedBoundaries,
           enableSelectionPreview: widget.enableSelectionPreview,
           debugMode: widget.debugMode,
+          controller: _textOverlayController,
         ),
       );
     }
@@ -629,4 +687,15 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
 
   /// Check if text detection is currently processing
   bool get isProcessing => _isProcessing;
+
+  bool _selectAllRecognizedText() {
+    if (!_hasSelectableText) {
+      return false;
+    }
+    return _textOverlayController.selectAllText();
+  }
+
+  void _notifyController() {
+    widget.controller?._notifyStateChanged();
+  }
 }
