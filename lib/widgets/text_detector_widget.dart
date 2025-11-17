@@ -14,7 +14,6 @@ const double _enteSelectionHighlightOpacity = 0.28;
 /// Collection of user-facing strings used by [TextDetectorWidget].
 class TextDetectorStrings {
   final String processingOverlayMessage;
-  final String loadingIndicatorLabel;
   final String selectionHint;
   final String noTextDetected;
   final String retryButtonLabel;
@@ -26,7 +25,6 @@ class TextDetectorStrings {
 
   const TextDetectorStrings({
     this.processingOverlayMessage = 'Detecting text...',
-    this.loadingIndicatorLabel = 'Detecting Text',
     this.selectionHint = 'Swipe or double tap to select just what you need',
     this.noTextDetected = 'No text detected',
     this.retryButtonLabel = 'Retry',
@@ -95,9 +93,6 @@ class TextDetectorWidget extends StatefulWidget {
   /// Whether to auto-detect text on load
   final bool autoDetect;
 
-  /// Custom loading widget
-  final Widget? loadingWidget;
-
   /// Background color
   final Color backgroundColor;
 
@@ -122,8 +117,7 @@ class TextDetectorWidget extends StatefulWidget {
     this.onTextCopied,
     this.onTextBlocksSelected,
     this.autoDetect = true,
-    this.loadingWidget,
-    this.backgroundColor = Colors.black,
+    this.backgroundColor = Colors.transparent,
     this.showUnselectedBoundaries = true,
     this.enableSelectionPreview = false,
     this.debugMode = false,
@@ -142,7 +136,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   bool _isProcessing = false;
   File? _imageFile;
   String? _resolvedImagePath;
-  bool _isFileReady = false;
+  Future<void>? _imagePreparation;
   bool _modelsReady = false;
   Future<void>? _modelPreparation;
   String? _errorMessage;
@@ -178,10 +172,18 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
     final requestedPath = widget.imagePath;
     _editorHintTimer?.cancel();
 
+    final preparation = _prepareDisplayImage(requestedPath);
+    _imagePreparation = preparation;
+    await preparation;
+    if (_imagePreparation == preparation) {
+      _imagePreparation = null;
+    }
+  }
+
+  Future<void> _prepareDisplayImage(String requestedPath) async {
     setState(() {
       _imageFile = null;
       _resolvedImagePath = null;
-      _isFileReady = false;
       _showEditorHint = false;
       _errorMessage = null;
     });
@@ -201,13 +203,12 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
       setState(() {
         _imageFile = file;
         _resolvedImagePath = resolvedPath;
-        _isFileReady = true;
       });
 
+      _precacheCurrentImage();
+
       if (widget.autoDetect) {
-        _preloadImageAndDetect();
-      } else {
-        precacheImage(FileImage(file), context);
+        unawaited(_detectText());
       }
     } catch (error) {
       debugPrint('Failed to prepare image $requestedPath: $error');
@@ -217,19 +218,10 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
       setState(() {
         _imageFile = null;
         _resolvedImagePath = null;
-        _isFileReady = false;
         _errorMessage = widget.strings.imageDecodeFailedError;
         _isProcessing = false;
       });
     }
-  }
-
-  Future<void> _preloadImageAndDetect() async {
-    if (_imageFile == null) return;
-    // Preload image asynchronously (non-blocking)
-    precacheImage(FileImage(_imageFile!), context);
-    // Detect text immediately
-    _detectText();
   }
 
   @override
@@ -244,7 +236,6 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
         _isProcessing = widget.autoDetect;
         _detectedTextBlocks = null;
         _imageFile = null;
-        _isFileReady = false;
         _errorMessage = null;
         _isNetworkError = false;
       });
@@ -286,7 +277,25 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
 
   Future<void> _detectText() async {
     final String requestedPath = widget.imagePath;
-    final String imagePath = _resolvedImagePath ?? requestedPath;
+    String? imagePath = _resolvedImagePath;
+    if (imagePath == null) {
+      final pendingPreparation = _imagePreparation;
+      if (pendingPreparation != null) {
+        await pendingPreparation;
+        if (!mounted || widget.imagePath != requestedPath) {
+          return;
+        }
+        imagePath = _resolvedImagePath;
+      }
+    }
+    if (imagePath == null) {
+      setState(() {
+        _errorMessage = widget.strings.imageDecodeFailedError;
+        _isProcessing = false;
+      });
+      _notifyController();
+      return;
+    }
 
     // Don't set processing true here if already processing
     if (!_isProcessing) {
@@ -345,73 +354,35 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: widget.backgroundColor,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          _buildImageView(),
-          // Show processing indicator on top of image when detecting text
-          if (_isProcessing && _detectedTextBlocks == null)
-            Positioned(
-              top: 100,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.7),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CupertinoActivityIndicator(
-                        radius: 10,
-                        color: Colors.white,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        widget.strings.processingOverlayMessage,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          if (_showEditorHint &&
-              _detectedTextBlocks != null &&
-              _detectedTextBlocks!.isNotEmpty)
-            _buildEditorHint(),
-          if (_errorMessage != null)
-            Positioned(
-              bottom: 32,
-              left: 16,
-              right: 16,
-              child: _isNetworkError
-                  ? _buildNetworkErrorBanner(_errorMessage!)
-                  : _buildErrorBanner(_errorMessage!),
-            ),
-          // Show subtle message when no text was detected
-          if (_detectedTextBlocks != null &&
-              _detectedTextBlocks!.isEmpty &&
-              _errorMessage == null)
-            Positioned(
-              top: 100,
-              left: 0,
-              right: 0,
-              child: Center(child: _buildNoTextMessage()),
-            ),
-        ],
-      ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _buildImageLayer(),
+        if (_isProcessing && _detectedTextBlocks == null)
+          _buildProcessingOverlay(),
+        if (_showEditorHint &&
+            _detectedTextBlocks != null &&
+            _detectedTextBlocks!.isNotEmpty)
+          _buildEditorHint(),
+        if (_errorMessage != null)
+          Positioned(
+            bottom: 32,
+            left: 16,
+            right: 16,
+            child: _isNetworkError
+                ? _buildNetworkErrorBanner(_errorMessage!)
+                : _buildErrorBanner(_errorMessage!),
+          ),
+        if (_detectedTextBlocks != null &&
+            _detectedTextBlocks!.isEmpty &&
+            _errorMessage == null)
+          Positioned(
+            top: 100,
+            left: 0,
+            right: 0,
+            child: Center(child: _buildNoTextMessage()),
+          ),
+      ],
     );
   }
 
@@ -488,30 +459,31 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
     });
   }
 
-  Widget _buildImageView() {
-    // Show loading if file is not ready yet
-    if (!_isFileReady || _imageFile == null) {
-      return widget.loadingWidget ??
-          Container(color: widget.backgroundColor);
+  Widget _buildImageLayer() {
+    final imageFile = _imageFile;
+    final textBlocks = _detectedTextBlocks;
+    if (imageFile == null || textBlocks == null) {
+      return const SizedBox.shrink();
     }
 
-    if (_detectedTextBlocks != null) {
-      final TextSelectionThemeData baseSelectionTheme = TextSelectionTheme.of(
-        context,
-      );
-      final TextSelectionThemeData overlaySelectionTheme = baseSelectionTheme
-          .copyWith(
-            selectionColor: _entePrimaryColor.withValues(
-              alpha: _enteSelectionHighlightOpacity,
-            ),
-            selectionHandleColor: _entePrimaryColor,
-          );
+    final TextSelectionThemeData baseSelectionTheme = TextSelectionTheme.of(
+      context,
+    );
+    final TextSelectionThemeData overlaySelectionTheme = baseSelectionTheme
+        .copyWith(
+          selectionColor: _entePrimaryColor.withValues(
+            alpha: _enteSelectionHighlightOpacity,
+          ),
+          selectionHandleColor: _entePrimaryColor,
+        );
 
-      return TextSelectionTheme(
+    return Container(
+      color: widget.backgroundColor,
+      child: TextSelectionTheme(
         data: overlaySelectionTheme,
         child: TextOverlayWidget(
-          imageFile: _imageFile!,
-          textBlocks: _detectedTextBlocks!,
+          imageFile: imageFile,
+          textBlocks: textBlocks,
           onTextBlocksSelected: widget.onTextBlocksSelected,
           onTextCopied: widget.onTextCopied,
           onSelectionStart: _dismissEditorHint,
@@ -520,36 +492,42 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
           debugMode: widget.debugMode,
           controller: _textOverlayController,
         ),
-      );
-    }
+      ),
+    );
+  }
 
-    if (_errorMessage != null) {
-      return Center(
-        child: _isNetworkError
-            ? _buildNetworkErrorBanner(_errorMessage!)
-            : _buildErrorBanner(_errorMessage!),
-      );
-    }
-
-    return InteractiveViewer(
-      minScale: 0.5,
-      maxScale: 4.0,
+  Widget _buildProcessingOverlay() {
+    return Positioned(
+      top: 100,
+      left: 0,
+      right: 0,
       child: Center(
-        child: Image.file(
-          _imageFile!,
-          fit: BoxFit.contain,
-          gaplessPlayback: true,
-          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-            if (wasSynchronouslyLoaded) {
-              return child;
-            }
-            return AnimatedOpacity(
-              opacity: frame == null ? 0 : 1,
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOut,
-              child: child,
-            );
-          },
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 12,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CupertinoActivityIndicator(
+                radius: 10,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                widget.strings.processingOverlayMessage,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -683,5 +661,13 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
 
   void _notifyController() {
     widget.controller?._notifyStateChanged();
+  }
+
+  void _precacheCurrentImage() {
+    final imageFile = _imageFile;
+    if (imageFile == null) {
+      return;
+    }
+    precacheImage(FileImage(imageFile), context);
   }
 }
