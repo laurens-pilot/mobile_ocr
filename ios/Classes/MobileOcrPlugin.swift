@@ -1,4 +1,5 @@
 import Flutter
+import Foundation
 import UIKit
 import Vision
 
@@ -69,7 +70,9 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                                   result: @escaping FlutterResult) {
         // Move processing to background queue
         let workItem = DispatchWorkItem {
+            let fileName = URL(fileURLWithPath: imagePath).lastPathComponent
             guard let image = UIImage(contentsOfFile: imagePath) else {
+                MobileOcrPlugin.logDebug("detectText load failure for \(fileName)")
                 DispatchQueue.main.async {
                     result(FlutterError(code: "IMAGE_LOAD_ERROR",
                                        message: "Failed to load image from path",
@@ -80,14 +83,20 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
 
             // Fix image orientation using modern API
             var fixedImage = image
+            var orientationFixed = false
             if image.imageOrientation != .up {
-                let renderer = UIGraphicsImageRenderer(size: image.size)
+                let format = UIGraphicsImageRendererFormat.default()
+                format.scale = image.scale  // preserve original pixel density
+                format.opaque = false
+                let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
                 fixedImage = renderer.image { _ in
-                    image.draw(at: .zero)
+                    image.draw(in: CGRect(origin: .zero, size: image.size))
                 }
+                orientationFixed = true
             }
 
             guard let cgImage = fixedImage.cgImage else {
+                MobileOcrPlugin.logDebug("detectText CGImage missing for \(fileName)")
                 DispatchQueue.main.async {
                     result(FlutterError(code: "IMAGE_LOAD_ERROR",
                                        message: "Failed to get CGImage",
@@ -96,9 +105,23 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 return
             }
 
+            let colorSpaceName = cgImage.colorSpace?.name as String? ?? "unknown"
+            let originalSize = "\(Int(image.size.width))x\(Int(image.size.height))"
+            let renderedSize = "\(cgImage.width)x\(cgImage.height)"
+            MobileOcrPlugin.logDebug(
+                "detectText start file=\(fileName) minConf=\(String(format: "%.2f", minConfidence))"
+                + " originalOrient=\(image.imageOrientation.rawValue)"
+                + " orientationFixed=\(orientationFixed)"
+                + " size=\(originalSize) renderedSize=\(renderedSize)"
+                + " colorSpace=\(colorSpaceName) bpc=\(cgImage.bitsPerComponent)"
+            )
+
             // Create Vision request
             let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
             var detectedTexts: [[String: Any]] = []
+            var observationCount = 0
+            var discardedLowConfidence = 0
+            var previewSamples: [String] = []
 
             let request = VNRecognizeTextRequest { (request, error) in
                 if let error = error {
@@ -109,13 +132,24 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 guard let observations = request.results as? [VNRecognizedTextObservation] else {
                     return
                 }
+                observationCount = observations.count
 
                 for observation in observations {
                     guard let topCandidate = observation.topCandidates(1).first else { continue }
 
                     // Filter by confidence
                     if topCandidate.confidence < minConfidence {
+                        discardedLowConfidence += 1
                         continue
+                    }
+
+                    if previewSamples.count < 5 {
+                        let sanitized = topCandidate.string
+                            .replacingOccurrences(of: "\n", with: " ")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        previewSamples.append(
+                            "\(String(format: "%.2f", topCandidate.confidence))|\(sanitized)"
+                        )
                     }
 
                     // Convert normalized coordinates to image coordinates
@@ -170,13 +204,22 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             request.usesLanguageCorrection = true
 
             // Use automatic language detection if available
+            var configuredRevision = request.revision
+            var autoLanguageEnabled = false
             if #available(iOS 16.0, *) {
                 request.automaticallyDetectsLanguage = true
+                autoLanguageEnabled = request.automaticallyDetectsLanguage
                 request.revision = VNRecognizeTextRequestRevision3
+                configuredRevision = request.revision
             } else {
                 // Default to English for older iOS versions
                 request.recognitionLanguages = ["en-US"]
             }
+            MobileOcrPlugin.logDebug(
+                "detectText request configured file=\(fileName)"
+                + " revision=\(configuredRevision)"
+                + " autoLanguage=\(autoLanguageEnabled)"
+            )
 
             // Perform the request
             do {
@@ -189,6 +232,13 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 }
                 return
             }
+            MobileOcrPlugin.logDebug(
+                "detectText finished file=\(fileName)"
+                + " observations=\(observationCount)"
+                + " kept=\(detectedTexts.count)"
+                + " droppedLowConf=\(discardedLowConfidence)"
+                + " samples=\(previewSamples.joined(separator: " | "))"
+            )
 
             // Helper function to calculate bounding rect
             func boundingRect(for pointMaps: [[String: Double]]) -> CGRect? {
@@ -262,8 +312,10 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                                  result: @escaping FlutterResult) {
         DispatchQueue.global(qos: .userInitiated).async(execute: { [weak self] in
             guard let self = self else { return }
+            let fileName = URL(fileURLWithPath: imagePath).lastPathComponent
 
             guard let image = UIImage(contentsOfFile: imagePath) else {
+                MobileOcrPlugin.logDebug("hasText load failure for \(fileName)")
                 DispatchQueue.main.async {
                     result(FlutterError(code: "IMAGE_LOAD_ERROR",
                                        message: "Failed to load image from path",
@@ -281,6 +333,12 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 let scale = min(maxDimension / image.size.width, maxDimension / image.size.height)
                 targetSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
             }
+            MobileOcrPlugin.logDebug(
+                "hasText start file=\(fileName)"
+                + " originalSize=\(Int(image.size.width))x\(Int(image.size.height))"
+                + " scaledSize=\(Int(targetSize.width))x\(Int(targetSize.height))"
+                + " minConf=\(String(format: "%.2f", minConfidence))"
+            )
 
             let renderer = UIGraphicsImageRenderer(size: targetSize)
             let fixedImage = renderer.image { _ in
@@ -288,6 +346,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             }
 
             guard let cgImage = fixedImage.cgImage else {
+                MobileOcrPlugin.logDebug("hasText CGImage missing for \(fileName)")
                 DispatchQueue.main.async {
                     result(FlutterError(code: "IMAGE_LOAD_ERROR",
                                        message: "Failed to get CGImage",
@@ -298,6 +357,11 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
 
             let requestHandler = VNImageRequestHandler(cgImage: cgImage, options: [:])
             var hasValidText = false
+            var observationCount = 0
+            var acceptedCandidates = 0
+            var rejectedByConfidence = 0
+            var rejectedByValidation = 0
+            var validationSamples: [String] = []
 
             // Use VNRecognizeTextRequest (same as detectText) instead of VNDetectTextRectanglesRequest
             // This ensures consistency between hasText and detectText
@@ -310,6 +374,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 guard let observations = request.results as? [VNRecognizedTextObservation] else {
                     return
                 }
+                observationCount = observations.count
 
                 // Check if any recognized text meets the confidence threshold and is valid
                 for observation in observations {
@@ -317,9 +382,24 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
 
                     let isValid = self.isValidText(topCandidate.string)
 
-                    if topCandidate.confidence >= minConfidence && isValid {
-                        hasValidText = true
-                        break  // Found at least one valid text with high confidence
+                    if topCandidate.confidence >= minConfidence {
+                        if isValid {
+                            acceptedCandidates += 1
+                            hasValidText = true
+                            if validationSamples.count < 3 {
+                                let sanitized = topCandidate.string
+                                    .replacingOccurrences(of: "\n", with: " ")
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                validationSamples.append(
+                                    "\(String(format: "%.2f", topCandidate.confidence))|\(sanitized)"
+                                )
+                            }
+                            break  // Found at least one valid text with high confidence
+                        } else {
+                            rejectedByValidation += 1
+                        }
+                    } else {
+                        rejectedByConfidence += 1
                     }
                 }
             }
@@ -330,12 +410,21 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             request.usesLanguageCorrection = true
 
             // Use automatic language detection if available
+            var configuredRevision = request.revision
+            var autoLanguageEnabled = false
             if #available(iOS 16.0, *) {
                 request.automaticallyDetectsLanguage = true
+                autoLanguageEnabled = request.automaticallyDetectsLanguage
                 request.revision = VNRecognizeTextRequestRevision3
+                configuredRevision = request.revision
             } else {
                 request.recognitionLanguages = ["en-US"]
             }
+            MobileOcrPlugin.logDebug(
+                "hasText request configured file=\(fileName)"
+                + " revision=\(configuredRevision)"
+                + " autoLanguage=\(autoLanguageEnabled)"
+            )
 
             do {
                 try requestHandler.perform([request])
@@ -347,11 +436,26 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 }
                 return
             }
+            MobileOcrPlugin.logDebug(
+                "hasText finished file=\(fileName)"
+                + " observations=\(observationCount)"
+                + " validMatches=\(acceptedCandidates)"
+                + " rejectedLowConf=\(rejectedByConfidence)"
+                + " rejectedValidation=\(rejectedByValidation)"
+                + " result=\(hasValidText)"
+                + " samples=\(validationSamples.joined(separator: " | "))"
+            )
 
             DispatchQueue.main.async {
                 result(hasValidText)
             }
         })
+    }
+
+    private static func logDebug(_ message: String) {
+        #if DEBUG
+        print("[MobileOCR] \(message)")
+        #endif
     }
 
 }
