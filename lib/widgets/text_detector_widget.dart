@@ -345,73 +345,37 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: widget.backgroundColor,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          _buildImageView(),
-          // Show processing indicator on top of image when detecting text
-          if (_isProcessing && _detectedTextBlocks == null)
-            Positioned(
-              top: 100,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.7),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const CupertinoActivityIndicator(
-                        radius: 10,
-                        color: Colors.white,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        widget.strings.processingOverlayMessage,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          if (_showEditorHint &&
-              _detectedTextBlocks != null &&
-              _detectedTextBlocks!.isNotEmpty)
-            _buildEditorHint(),
-          if (_errorMessage != null)
-            Positioned(
-              bottom: 32,
-              left: 16,
-              right: 16,
-              child: _isNetworkError
-                  ? _buildNetworkErrorBanner(_errorMessage!)
-                  : _buildErrorBanner(_errorMessage!),
-            ),
-          // Show subtle message when no text was detected
-          if (_detectedTextBlocks != null &&
-              _detectedTextBlocks!.isEmpty &&
-              _errorMessage == null)
-            Positioned(
-              top: 100,
-              left: 0,
-              right: 0,
-              child: Center(child: _buildNoTextMessage()),
-            ),
-        ],
-      ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _buildImageLayer(),
+        if (_imageFile == null && widget.loadingWidget != null)
+          Center(child: widget.loadingWidget),
+        if (_isProcessing && _detectedTextBlocks == null)
+          _buildProcessingOverlay(),
+        if (_showEditorHint &&
+            _detectedTextBlocks != null &&
+            _detectedTextBlocks!.isNotEmpty)
+          _buildEditorHint(),
+        if (_errorMessage != null)
+          Positioned(
+            bottom: 32,
+            left: 16,
+            right: 16,
+            child: _isNetworkError
+                ? _buildNetworkErrorBanner(_errorMessage!)
+                : _buildErrorBanner(_errorMessage!),
+          ),
+        if (_detectedTextBlocks != null &&
+            _detectedTextBlocks!.isEmpty &&
+            _errorMessage == null)
+          Positioned(
+            top: 100,
+            left: 0,
+            right: 0,
+            child: Center(child: _buildNoTextMessage()),
+          ),
+      ],
     );
   }
 
@@ -488,13 +452,13 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
     });
   }
 
-  Widget _buildImageView() {
-    // Show loading if file is not ready yet
-    if (!_isFileReady || _imageFile == null) {
-      return widget.loadingWidget ??
-          Container(color: widget.backgroundColor);
+  Widget _buildImageLayer() {
+    final imageFile = _imageFile;
+    if (!_isFileReady || imageFile == null) {
+      return const SizedBox.shrink();
     }
 
+    Widget content;
     if (_detectedTextBlocks != null) {
       final TextSelectionThemeData baseSelectionTheme = TextSelectionTheme.of(
         context,
@@ -507,10 +471,10 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
             selectionHandleColor: _entePrimaryColor,
           );
 
-      return TextSelectionTheme(
+      content = TextSelectionTheme(
         data: overlaySelectionTheme,
         child: TextOverlayWidget(
-          imageFile: _imageFile!,
+          imageFile: imageFile,
           textBlocks: _detectedTextBlocks!,
           onTextBlocksSelected: widget.onTextBlocksSelected,
           onTextCopied: widget.onTextCopied,
@@ -521,35 +485,75 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
           controller: _textOverlayController,
         ),
       );
-    }
-
-    if (_errorMessage != null) {
-      return Center(
+    } else if (_errorMessage != null) {
+      content = Center(
         child: _isNetworkError
             ? _buildNetworkErrorBanner(_errorMessage!)
             : _buildErrorBanner(_errorMessage!),
       );
+    } else {
+      content = InteractiveViewer(
+        minScale: 0.5,
+        maxScale: 4.0,
+        child: Center(
+          child: Image.file(
+            imageFile,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+              if (wasSynchronouslyLoaded) {
+                return child;
+              }
+              return AnimatedOpacity(
+                opacity: frame == null ? 0 : 1,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                child: child,
+              );
+            },
+          ),
+        ),
+      );
     }
 
-    return InteractiveViewer(
-      minScale: 0.5,
-      maxScale: 4.0,
+    return Container(
+      color: widget.backgroundColor,
+      child: content,
+    );
+  }
+
+  Widget _buildProcessingOverlay() {
+    return Positioned(
+      top: 100,
+      left: 0,
+      right: 0,
       child: Center(
-        child: Image.file(
-          _imageFile!,
-          fit: BoxFit.contain,
-          gaplessPlayback: true,
-          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-            if (wasSynchronouslyLoaded) {
-              return child;
-            }
-            return AnimatedOpacity(
-              opacity: frame == null ? 0 : 1,
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOut,
-              child: child,
-            );
-          },
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 12,
+          ),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.7),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CupertinoActivityIndicator(
+                radius: 10,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                widget.strings.processingOverlayMessage,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
