@@ -126,7 +126,7 @@ Must match OnnxOCR exactly:
 
 **Android** (`android/build.gradle`):
 ```gradle
-implementation("com.microsoft.onnxruntime:onnxruntime-android:latest.release")
+implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 ```
 
