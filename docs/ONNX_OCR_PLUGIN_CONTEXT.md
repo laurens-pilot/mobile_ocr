@@ -172,7 +172,7 @@ onnx_ocr_plugin/
 
 ```gradle
 dependencies {
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.16.3")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3')
    }
 ```
