@@ -9,6 +9,9 @@ object ImageUtils {
         if (points.size != 4) {
             throw IllegalArgumentException("Expected 4 points for text region")
         }
+        if (bitmap.isRecycled) {
+            throw IllegalStateException("Source bitmap was recycled before cropping")
+        }
 
         // Calculate dimensions of the cropped region
         // Use maximum of opposing sides to avoid truncation (matching Python implementation)
@@ -41,7 +44,6 @@ object ImageUtils {
         val matrix = Matrix().apply {
             setPolyToPoly(srcPoints, 0, dstPoints, 0, 4)
         }
-
         val croppedBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(croppedBitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -171,5 +173,3 @@ object ImageUtils {
         return width >= minWidth && height >= minHeight
     }
 }
-
-

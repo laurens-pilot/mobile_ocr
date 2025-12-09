@@ -113,7 +113,7 @@ class TextDetector(
         // Calculate resize dimensions
         val (resizedWidth, resizedHeight) = calculateResizeDimensions(originalWidth, originalHeight)
 
-        // Resize bitmap
+        // Resize bitmap; Android may return the original if sizes match
         val resizedBitmap = Bitmap.createScaledBitmap(bitmap, resizedWidth, resizedHeight, true)
 
         // Convert to float array with normalization
@@ -142,7 +142,9 @@ class TextDetector(
             }
         }
 
-        resizedBitmap.recycle()
+        if (resizedBitmap !== bitmap && !resizedBitmap.isRecycled) {
+            resizedBitmap.recycle()
+        }
 
         val shape = longArrayOf(1, 3, resizedHeight.toLong(), resizedWidth.toLong())
         val inputTensor = OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(inputArray), shape)
