@@ -92,13 +92,15 @@ class TextClassifier(
             IMG_WIDTH
         )
 
-        // Resize bitmap
+        // Resize bitmap; Android may return the original if sizes match
         val resizedBitmap = Bitmap.createScaledBitmap(bitmap, resizedWidth, IMG_HEIGHT, true)
 
         // Get pixels
         val pixels = IntArray(resizedWidth * IMG_HEIGHT)
         resizedBitmap.getPixels(pixels, 0, resizedWidth, 0, 0, resizedWidth, IMG_HEIGHT)
-        resizedBitmap.recycle()
+        if (resizedBitmap !== bitmap && !resizedBitmap.isRecycled) {
+            resizedBitmap.recycle()
+        }
 
         // Normalize and convert to CHW format
         val baseOffset = batchIndex * 3 * IMG_HEIGHT * IMG_WIDTH
