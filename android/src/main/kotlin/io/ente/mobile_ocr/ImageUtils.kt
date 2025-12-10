@@ -1,9 +1,23 @@
 package io.ente.mobile_ocr
 
 import android.graphics.*
+import java.nio.FloatBuffer
 import kotlin.math.*
 
 object ImageUtils {
+
+    /**
+     * Safely converts a FloatBuffer to a FloatArray.
+     * This handles both heap and direct buffers, unlike FloatBuffer.array()
+     * which throws UnsupportedOperationException for direct buffers.
+     */
+    fun toFloatArray(buffer: FloatBuffer): FloatArray {
+        val duplicate = buffer.duplicate()
+        duplicate.rewind()
+        val array = FloatArray(duplicate.remaining())
+        duplicate.get(array)
+        return array
+    }
 
     fun cropTextRegion(bitmap: Bitmap, points: List<PointF>): Bitmap {
         if (points.size != 4) {
