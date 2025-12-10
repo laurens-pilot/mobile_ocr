@@ -5,7 +5,6 @@ import android.graphics.Matrix
 import ai.onnxruntime.*
 import java.nio.FloatBuffer
 import kotlin.math.ceil
-import kotlin.math.roundToInt
 
 data class ClassificationOutput(
     val bitmap: Bitmap,
@@ -133,7 +132,7 @@ class TextClassifier(
     }
 
     private fun decodeOutput(output: OnnxTensor, batchSize: Int): List<Boolean> {
-        val outputArray = output.floatBuffer.array()
+        val outputArray = ImageUtils.toFloatArray(output.floatBuffer)
         val results = mutableListOf<Boolean>()
 
         // Output shape should be [batch_size, 2] where 2 classes are ["0", "180"]

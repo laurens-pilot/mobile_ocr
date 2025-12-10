@@ -153,7 +153,7 @@ class TextRecognizer(
     }
 
     private fun decodeOutput(output: OnnxTensor, batchSize: Int, contentWidths: IntArray, targetWidth: Int): List<RecognitionResult> {
-        val outputArray = output.floatBuffer.array()
+        val outputArray = ImageUtils.toFloatArray(output.floatBuffer)
         val shape = output.info.shape
         val seqLen = shape[1].toInt()
         val vocabSize = shape[2].toInt()

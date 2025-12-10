@@ -18,6 +18,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 
 /** MobileOcrPlugin */
 class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
@@ -34,7 +35,10 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   private var cachedModelFiles: ModelFiles? = null
   private val modelMutex = Mutex()
   private val processorMutex = Mutex()
+  private val displayableCacheMutex = Mutex()
   private val displayableImageCache = mutableMapOf<String, ImageCacheEntry>()
+  private val activeTasks = AtomicInteger(0)
+  @Volatile private var shuttingDown = false
 
   private data class ImageCacheEntry(
     val cachedPath: String,
@@ -163,50 +167,64 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   }
 
   private suspend fun processImage(imagePath: String, includeAllConfidenceScores: Boolean = false): List<Map<String, Any>> {
-    val processor = getOrCreateProcessor()
-
-    val file = java.io.File(imagePath)
-    if (!file.exists()) {
-      throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+    if (shuttingDown) {
+      throw IllegalStateException("Plugin is shutting down")
     }
+    activeTasks.incrementAndGet()
+    try {
+      val processor = getOrCreateProcessor()
 
-    val bitmap = BitmapFactory.decodeFile(imagePath)
-        ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
-    val correctedBitmap = applyExifOrientation(bitmap, imagePath)
+      val file = java.io.File(imagePath)
+      if (!file.exists()) {
+        throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+      }
 
-    // Process with OCR
-    val ocrResults = processor.processImage(correctedBitmap, includeAllConfidenceScores)
+      val bitmap = BitmapFactory.decodeFile(imagePath)
+          ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
+      val correctedBitmap = applyExifOrientation(bitmap, imagePath)
 
-    if (ocrResults.texts.isEmpty()) {
-      return emptyList()
-    }
+      // Process with OCR
+      val ocrResults = processor.processImage(correctedBitmap, includeAllConfidenceScores)
+      if (correctedBitmap !== bitmap && !bitmap.isRecycled) {
+        bitmap.recycle()
+      }
+      if (!correctedBitmap.isRecycled) {
+        correctedBitmap.recycle()
+      }
 
-    return ocrResults.boxes.mapIndexed { index, box ->
-      val pointMaps: List<Map<String, Double>> = box.points.map { point ->
-        mapOf(
-          "x" to point.x.toDouble(),
-          "y" to point.y.toDouble()
+      if (ocrResults.texts.isEmpty()) {
+        return emptyList()
+      }
+
+      return ocrResults.boxes.mapIndexed { index, box ->
+        val pointMaps: List<Map<String, Double>> = box.points.map { point ->
+          mapOf(
+            "x" to point.x.toDouble(),
+            "y" to point.y.toDouble()
+          )
+        }
+        val characterMaps: List<Map<String, Any>> = ocrResults.characters.getOrNull(index)?.map { character ->
+          mapOf<String, Any>(
+            "text" to character.text,
+            "confidence" to character.confidence.toDouble(),
+            "points" to character.points.map { charPoint ->
+              mapOf(
+                "x" to charPoint.x.toDouble(),
+                "y" to charPoint.y.toDouble()
+              )
+            }
+          )
+        } ?: emptyList()
+
+        hashMapOf<String, Any>(
+          "text" to ocrResults.texts[index],
+          "confidence" to ocrResults.scores[index].toDouble(),
+          "points" to pointMaps,
+          "characters" to characterMaps
         )
       }
-      val characterMaps: List<Map<String, Any>> = ocrResults.characters.getOrNull(index)?.map { character ->
-        mapOf<String, Any>(
-          "text" to character.text,
-          "confidence" to character.confidence.toDouble(),
-          "points" to character.points.map { charPoint ->
-            mapOf(
-              "x" to charPoint.x.toDouble(),
-              "y" to charPoint.y.toDouble()
-            )
-          }
-        )
-      } ?: emptyList()
-
-      hashMapOf<String, Any>(
-        "text" to ocrResults.texts[index],
-        "confidence" to ocrResults.scores[index].toDouble(),
-        "points" to pointMaps,
-        "characters" to characterMaps
-      )
+    } finally {
+      activeTasks.decrementAndGet()
     }
   }
 
@@ -214,18 +232,35 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     imagePath: String,
     minDetectionConfidence: Float
   ): QuickCheckResult {
-    val processor = getOrCreateProcessor()
-
-    val file = java.io.File(imagePath)
-    if (!file.exists()) {
-      throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+    if (shuttingDown) {
+      throw IllegalStateException("Plugin is shutting down")
     }
+    activeTasks.incrementAndGet()
+    try {
+      val processor = getOrCreateProcessor()
 
-    val bitmap = BitmapFactory.decodeFile(imagePath)
-      ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
-    val correctedBitmap = applyExifOrientation(bitmap, imagePath)
+      val file = java.io.File(imagePath)
+      if (!file.exists()) {
+        throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+      }
 
-    return processor.hasHighConfidenceText(correctedBitmap, minDetectionConfidence)
+      val bitmap = BitmapFactory.decodeFile(imagePath)
+        ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
+      val correctedBitmap = applyExifOrientation(bitmap, imagePath)
+
+      val result = processor.hasHighConfidenceText(correctedBitmap, minDetectionConfidence)
+
+      if (correctedBitmap !== bitmap && !bitmap.isRecycled) {
+        bitmap.recycle()
+      }
+      if (!correctedBitmap.isRecycled) {
+        correctedBitmap.recycle()
+      }
+
+      return result
+    } finally {
+      activeTasks.decrementAndGet()
+    }
   }
 
   private fun ensureImageIsDisplayable(imagePath: String): String {
@@ -243,52 +278,56 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     val size = file.length()
     val cacheKey = file.absolutePath
 
-    displayableImageCache[cacheKey]?.let { entry ->
-      val cachedFile = File(entry.cachedPath)
-      if (
-        entry.sourceModified == lastModified &&
-        entry.sourceSize == size &&
-        cachedFile.exists()
-      ) {
-        return entry.cachedPath
+    return runBlocking {
+      displayableCacheMutex.withLock {
+        displayableImageCache[cacheKey]?.let { entry ->
+          val cachedFile = File(entry.cachedPath)
+          if (
+            entry.sourceModified == lastModified &&
+            entry.sourceSize == size &&
+            cachedFile.exists()
+          ) {
+            return@runBlocking entry.cachedPath
+          }
+        }
+
+        val bitmap = BitmapFactory.decodeFile(imagePath)
+            ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
+        val correctedBitmap = applyExifOrientation(bitmap, imagePath)
+
+        val cacheDir = File(context.cacheDir, "mobile_ocr_display").apply {
+          if (!exists()) {
+            mkdirs()
+          }
+        }
+        val digestInput = "$cacheKey:$lastModified:$size"
+        val hash = MessageDigest.getInstance("MD5").digest(digestInput.toByteArray())
+          .joinToString("") { "%02x".format(it) }
+        val cacheFile = File(cacheDir, "img_$hash.png")
+
+        FileOutputStream(cacheFile).use { stream ->
+          val success = correctedBitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+          if (!success) {
+            throw IllegalStateException("Failed to encode PNG for $imagePath")
+          }
+        }
+
+        if (correctedBitmap !== bitmap && !bitmap.isRecycled) {
+          bitmap.recycle()
+        }
+        if (!correctedBitmap.isRecycled) {
+          correctedBitmap.recycle()
+        }
+
+        displayableImageCache[cacheKey] = ImageCacheEntry(
+          cachedPath = cacheFile.absolutePath,
+          sourceModified = lastModified,
+          sourceSize = size
+        )
+
+        cacheFile.absolutePath
       }
     }
-
-    val bitmap = BitmapFactory.decodeFile(imagePath)
-        ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
-    val correctedBitmap = applyExifOrientation(bitmap, imagePath)
-
-    val cacheDir = File(context.cacheDir, "mobile_ocr_display").apply {
-      if (!exists()) {
-        mkdirs()
-      }
-    }
-    val digestInput = "$cacheKey:$lastModified:$size"
-    val hash = MessageDigest.getInstance("MD5").digest(digestInput.toByteArray())
-      .joinToString("") { "%02x".format(it) }
-    val cacheFile = File(cacheDir, "img_$hash.png")
-
-    FileOutputStream(cacheFile).use { stream ->
-      val success = correctedBitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-      if (!success) {
-        throw IllegalStateException("Failed to encode PNG for $imagePath")
-      }
-    }
-
-    if (correctedBitmap != bitmap && !bitmap.isRecycled) {
-      bitmap.recycle()
-    }
-    if (!correctedBitmap.isRecycled) {
-      correctedBitmap.recycle()
-    }
-
-    displayableImageCache[cacheKey] = ImageCacheEntry(
-      cachedPath = cacheFile.absolutePath,
-      sourceModified = lastModified,
-      sourceSize = size
-    )
-
-    return cacheFile.absolutePath
   }
 
   private fun applyExifOrientation(source: Bitmap, imagePath: String): Bitmap {
@@ -332,8 +371,14 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
 
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
     channel.setMethodCallHandler(null)
+    shuttingDown = true
     mainScope.cancel()
     runBlocking {
+      withTimeoutOrNull(5_000) {
+        while (activeTasks.get() > 0) {
+          delay(50)
+        }
+      }
       processorMutex.withLock {
         ocrProcessor?.close()
         ocrProcessor = null

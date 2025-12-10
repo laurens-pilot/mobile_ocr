@@ -178,7 +178,7 @@ class TextDetector(
         resizedHeight: Int,
         handler: (TextBox, Float) -> Boolean
     ) {
-        val outputArray = output.floatBuffer.array()
+        val outputArray = ImageUtils.toFloatArray(output.floatBuffer)
         val probMap = Array(resizedHeight) { FloatArray(resizedWidth) }
 
         // Extract probability map (first channel)
@@ -236,6 +236,7 @@ class TextDetector(
             }
         }
     }
+
     private fun extractConnectedComponents(binaryMap: Array<BooleanArray>): List<List<PointF>> {
         val height = binaryMap.size
         val width = if (height > 0) binaryMap[0].size else 0

@@ -410,10 +410,14 @@ class OcrProcessor(
         indices.forEachIndexed { idx, imageIndex ->
             classificationMask[imageIndex] = true
             val output = outputs[idx]
+            val old = images[imageIndex]
             if (output.rotated) {
                 rotationStates[imageIndex] = !rotationStates[imageIndex]
             }
             images[imageIndex] = output.bitmap
+            if (output.rotated && output.bitmap !== old && !old.isRecycled) {
+                old.recycle()
+            }
             saveDebugBitmap(output.bitmap, "crop", imageIndex, stageLabel)
         }
     }
