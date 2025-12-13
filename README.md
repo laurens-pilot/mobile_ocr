@@ -42,7 +42,7 @@ import 'package:mobile_ocr/mobile_ocr_plugin.dart';
 // Create plugin instance
 final ocrPlugin = MobileOcr();
 
-// Android only: ensure ONNX models are cached locally (downloads on first run).
+// Android only: ensure ONNX models are copied from the bundled assets (no download).
 // No-op on iOS because Vision ships with the OS.
 await ocrPlugin.prepareModels();
 
@@ -108,11 +108,9 @@ flutter run
 
 ## Android Model Assets (ONNX)
 
-The ONNX models (~20 MB total) are **not** bundled with the plugin. They are hosted at
-`https://models.ente.io/PP-OCRv5/` and downloaded on demand the first time you call
-`prepareModels()`. Files are cached under `context.filesDir/assets/mobile_ocr/` with SHA-256
-verification so subsequent runs work offline. You can call `prepareModels()` during app launch to
-show a download progress indicator before triggering OCR.
+The ONNX models (~20 MB total) ship inside the plugin under `android/src/main/assets/mobile_ocr/`.
+`prepareModels()` copies them into `context.filesDir/assets/mobile_ocr/` with SHA-256 verification
+so they are ready for ONNX Runtime. Everything runs fully offline—no CDN fetch is required.
 
 iOS does not require this step because it relies on the built-in Vision framework.
 

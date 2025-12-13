@@ -7,11 +7,10 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.security.MessageDigest
 
 private data class ModelAsset(
+    val assetPath: String,
     val fileName: String,
     val sha256: String,
     val sizeBytes: Long
@@ -29,18 +28,16 @@ data class ModelFiles(
 class ModelManager(private val context: Context) {
 
     companion object {
-        private const val BASE_URL = "https://models.ente.io/PP-OCRv5/"
         private const val MODEL_VERSION = "pp-ocrv5-202410"
-        private const val CONNECT_TIMEOUT_MS = 15_000
-        private const val READ_TIMEOUT_MS = 60_000
         private const val BUFFER_SIZE = 8 * 1024
         private const val VERSION_FILE_NAME = ".model_version"
+        private const val ASSET_PREFIX = "mobile_ocr/"
 
         private val REQUIRED_ASSETS = listOf(
-            ModelAsset("det.onnx", "d7fe3ea74652890722c0f4d02458b7261d9f5ae6c92904d05707c9eb155c7924", 4_748_769),
-            ModelAsset("rec.onnx", "bf66820f48fa99f779974c4df78e5274a9d8e0458c4137e8c5357e40e2c3faf2", 16_517_247),
-            ModelAsset("cls.onnx", "f4bb53707100c5f3d59ba834eb05bb400369f20aed35d4b26807b1bfadd2a70e", 582_663),
-            ModelAsset("ppocrv5_dict.txt", "d1979e9f794c464c0d2e0b70a7fe14dd978e9dc644c0e71f14158cdf8342af1b", 74_012)
+            ModelAsset("${ASSET_PREFIX}det.onnx", "det.onnx", "d7fe3ea74652890722c0f4d02458b7261d9f5ae6c92904d05707c9eb155c7924", 4_748_769),
+            ModelAsset("${ASSET_PREFIX}rec.onnx", "rec.onnx", "bf66820f48fa99f779974c4df78e5274a9d8e0458c4137e8c5357e40e2c3faf2", 16_517_247),
+            ModelAsset("${ASSET_PREFIX}cls.onnx", "cls.onnx", "f4bb53707100c5f3d59ba834eb05bb400369f20aed35d4b26807b1bfadd2a70e", 582_663),
+            ModelAsset("${ASSET_PREFIX}ppocrv5_dict.txt", "ppocrv5_dict.txt", "d1979e9f794c464c0d2e0b70a7fe14dd978e9dc644c0e71f14158cdf8342af1b", 74_012)
         )
     }
 
@@ -66,7 +63,7 @@ class ModelManager(private val context: Context) {
                 if (valid) {
                     target
                 } else {
-                    downloadAsset(asset, target)
+                    copyAsset(asset, target)
                 }
             }
 
@@ -99,23 +96,10 @@ class ModelManager(private val context: Context) {
         return storedVersion != MODEL_VERSION
     }
 
-    private fun downloadAsset(asset: ModelAsset, target: File): File {
-        val tempFile = File.createTempFile(asset.fileName, ".download", cacheDirectory)
-        var connection: HttpURLConnection? = null
+    private fun copyAsset(asset: ModelAsset, target: File): File {
+        val tempFile = File.createTempFile(asset.fileName, ".copy", cacheDirectory)
         try {
-            connection = URL("$BASE_URL${asset.fileName}").openConnection() as HttpURLConnection
-            connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS
-            connection.requestMethod = "GET"
-            connection.instanceFollowRedirects = true
-
-            val responseCode = connection.responseCode
-            if (responseCode != HttpURLConnection.HTTP_OK) {
-                connection.disconnect()
-                throw IOException("Failed to download ${asset.fileName}: HTTP $responseCode")
-            }
-
-            connection.inputStream.use { input ->
+            context.assets.open(asset.assetPath).use { input ->
                 FileOutputStream(tempFile).use { output ->
                     copyStream(input, output)
                 }
@@ -132,8 +116,8 @@ class ModelManager(private val context: Context) {
                 throw IOException("Checksum mismatch for ${asset.fileName}: expected ${asset.sha256}, got $actualSha")
             }
 
-            if (target.exists()) {
-                target.delete()
+            if (target.exists() && !target.delete()) {
+                throw IOException("Failed to replace existing ${asset.fileName} in cache directory")
             }
             if (!tempFile.renameTo(target)) {
                 throw IOException("Failed to move ${asset.fileName} into cache directory")
@@ -141,7 +125,6 @@ class ModelManager(private val context: Context) {
 
             return target
         } finally {
-            connection?.disconnect()
             if (tempFile.exists()) {
                 tempFile.delete()
             }
