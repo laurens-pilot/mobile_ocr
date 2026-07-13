@@ -122,7 +122,7 @@ onnx_ocr_plugin/
 
 ### Key Implementation Details (Android)
 
-- **ONNX Runtime**: Version 1.16.3 for Android (only allowed external dependency)
+- **ONNX Runtime**: Version 1.27.0 for Android (only allowed external dependency)
 - **Async Processing**: Kotlin coroutines for non-blocking operations
 - **Memory Optimization**: All heavy processing stays in native layer
 - **Model Delivery**: `ModelManager` downloads PaddleOCR assets from `https://models.ente.io/PP-OCRv5/`, verifies SHA-256 hashes, and caches them under `filesDir/onnx_ocr/PP-OCRv5/`
@@ -172,7 +172,7 @@ onnx_ocr_plugin/
 
 ```gradle
 dependencies {
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.27.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3')
    }
 ```
