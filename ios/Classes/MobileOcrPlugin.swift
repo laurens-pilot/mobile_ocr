@@ -123,6 +123,10 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 }
                 return
             }
+            let detectionImage = self.downscaledCGImage(
+                fixedImage,
+                maxDimension: 1024
+            ) ?? cgImage
 
             var regions: [[String: Any]] = []
             var callbackError: Error?
@@ -155,7 +159,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             self.register(request, requestId: requestId)
 
             do {
-                try VNImageRequestHandler(cgImage: cgImage, options: [:])
+                try VNImageRequestHandler(cgImage: detectionImage, options: [:])
                     .perform([request])
             } catch {
                 callbackError = error
@@ -361,8 +365,9 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 request.revision = VNRecognizeTextRequestRevision3
                 configuredRevision = request.revision
             } else {
-                // Default to English for older iOS versions
-                request.recognitionLanguages = ["en-US"]
+                request.recognitionLanguages = self.preferredRecognitionLanguages(
+                    for: request
+                )
             }
             MobileOcrPlugin.logDebug(
                 "detectText request configured file=\(fileName)"
@@ -546,7 +551,13 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 + " minConf=\(String(format: "%.2f", minConfidence))"
             )
 
-            let renderer = UIGraphicsImageRenderer(size: targetSize)
+            let rendererFormat = UIGraphicsImageRendererFormat.default()
+            rendererFormat.scale = 1.0
+            rendererFormat.opaque = false
+            let renderer = UIGraphicsImageRenderer(
+                size: targetSize,
+                format: rendererFormat
+            )
             let fixedImage = renderer.image { _ in
                 image.draw(in: CGRect(origin: .zero, size: targetSize))
             }
@@ -625,7 +636,9 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 request.revision = VNRecognizeTextRequestRevision3
                 configuredRevision = request.revision
             } else {
-                request.recognitionLanguages = ["en-US"]
+                request.recognitionLanguages = self.preferredRecognitionLanguages(
+                    for: request
+                )
             }
             MobileOcrPlugin.logDebug(
                 "hasText request configured file=\(fileName)"
@@ -665,6 +678,62 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 result(hasValidText)
             }
         })
+    }
+
+    private func downscaledCGImage(_ image: UIImage,
+                                   maxDimension: CGFloat) -> CGImage? {
+        guard let source = image.cgImage else { return nil }
+        let width = CGFloat(source.width)
+        let height = CGFloat(source.height)
+        let longestSide = max(width, height)
+        guard longestSide > maxDimension else { return source }
+
+        let scale = maxDimension / longestSide
+        let targetSize = CGSize(
+            width: max(1, (width * scale).rounded()),
+            height: max(1, (height * scale).rounded())
+        )
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1.0
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: targetSize, format: format)
+            .image { _ in
+                image.draw(in: CGRect(origin: .zero, size: targetSize))
+            }
+            .cgImage
+    }
+
+    private func preferredRecognitionLanguages(
+        for request: VNRecognizeTextRequest
+    ) -> [String] {
+        let supported = (try? VNRecognizeTextRequest.supportedRecognitionLanguages(
+            for: request.recognitionLevel,
+            revision: request.revision
+        )) ?? ["en-US"]
+        var selected: [String] = []
+        for preferred in Locale.preferredLanguages {
+            let languageCode = preferred.split(separator: "-").first.map(String.init)
+            let match = supported.first { supportedLanguage in
+                if supportedLanguage == preferred {
+                    return true
+                }
+                guard let languageCode = languageCode else { return false }
+                return supportedLanguage == languageCode ||
+                    supportedLanguage.hasPrefix("\(languageCode)-")
+            }
+            if let match = match, !selected.contains(match) {
+                selected.append(match)
+            }
+            if selected.count == 3 {
+                break
+            }
+        }
+        if selected.count < 3,
+           supported.contains("en-US"),
+           !selected.contains("en-US") {
+            selected.append("en-US")
+        }
+        return selected.isEmpty ? Array(supported.prefix(1)) : selected
     }
 
     private func handleCancelRequest(call: FlutterMethodCall,
