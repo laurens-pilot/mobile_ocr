@@ -26,6 +26,10 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   companion object {
     private const val TAG = "MobileOcrPlugin"
     private const val QUICK_DETECTION_MIN_SCORE = 0.9f
+    private const val FULL_OCR_MAX_DIMENSION = 4096
+    private const val FULL_OCR_MAX_PIXELS = 12_000_000L
+    private const val REGION_MAX_DIMENSION = 1280
+    private const val REGION_MAX_PIXELS = 2_000_000L
   }
 
   private lateinit var channel : MethodChannel
@@ -48,6 +52,12 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     val cachedPath: String,
     val sourceModified: Long,
     val sourceSize: Long
+  )
+
+  private data class DecodedImage(
+    val bitmap: Bitmap,
+    val orientedWidth: Int,
+    val orientedHeight: Int
   )
 
   private val transcodableExtensions = setOf("heic", "heif", "heics", "avif")
@@ -274,20 +284,22 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         throw IllegalArgumentException("Image file does not exist at path: $imagePath")
       }
 
-      val bitmap = BitmapFactory.decodeFile(imagePath)
-          ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
-      val correctedBitmap = applyExifOrientation(bitmap, imagePath)
+      val decoded = decodeImage(
+        imagePath,
+        FULL_OCR_MAX_DIMENSION,
+        FULL_OCR_MAX_PIXELS
+      )
+      val imageWidth = decoded.orientedWidth
+      val imageHeight = decoded.orientedHeight
+      val scaleX = imageWidth.toFloat() / decoded.bitmap.width
+      val scaleY = imageHeight.toFloat() / decoded.bitmap.height
 
-      val imageWidth = correctedBitmap.width
-      val imageHeight = correctedBitmap.height
-
-      // Process with OCR
-      val ocrResults = processor.processImage(correctedBitmap, includeAllConfidenceScores)
-      if (correctedBitmap !== bitmap && !bitmap.isRecycled) {
-        bitmap.recycle()
-      }
-      if (!correctedBitmap.isRecycled) {
-        correctedBitmap.recycle()
+      val ocrResults = try {
+        processor.processImage(decoded.bitmap, includeAllConfidenceScores)
+      } finally {
+        if (!decoded.bitmap.isRecycled) {
+          decoded.bitmap.recycle()
+        }
       }
 
       if (ocrResults.texts.isEmpty()) {
@@ -301,8 +313,8 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
       val blocks = ocrResults.boxes.mapIndexed { index, box ->
         val pointMaps: List<Map<String, Double>> = box.points.map { point ->
           mapOf(
-            "x" to point.x.toDouble(),
-            "y" to point.y.toDouble()
+            "x" to (point.x * scaleX).toDouble(),
+            "y" to (point.y * scaleY).toDouble()
           )
         }
         val characterMaps: List<Map<String, Any>> = ocrResults.characters.getOrNull(index)?.map { character ->
@@ -311,8 +323,8 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
             "confidence" to character.confidence.toDouble(),
             "points" to character.points.map { charPoint ->
               mapOf(
-                "x" to charPoint.x.toDouble(),
-                "y" to charPoint.y.toDouble()
+                "x" to (charPoint.x * scaleX).toDouble(),
+                "y" to (charPoint.y * scaleY).toDouble()
               )
             }
           )
@@ -352,20 +364,18 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         throw IllegalArgumentException("Image file does not exist at path: $imagePath")
       }
 
-      val bitmap = BitmapFactory.decodeFile(imagePath)
-        ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
-      val correctedBitmap = applyExifOrientation(bitmap, imagePath)
-
-      val result = processor.hasHighConfidenceText(correctedBitmap, minDetectionConfidence)
-
-      if (correctedBitmap !== bitmap && !bitmap.isRecycled) {
-        bitmap.recycle()
+      val decoded = decodeImage(
+        imagePath,
+        REGION_MAX_DIMENSION,
+        REGION_MAX_PIXELS
+      )
+      return try {
+        processor.hasHighConfidenceText(decoded.bitmap, minDetectionConfidence)
+      } finally {
+        if (!decoded.bitmap.isRecycled) {
+          decoded.bitmap.recycle()
+        }
       }
-      if (!correctedBitmap.isRecycled) {
-        correctedBitmap.recycle()
-      }
-
-      return result
     } finally {
       activeTasks.decrementAndGet()
     }
@@ -382,30 +392,34 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         throw IllegalArgumentException("Image file does not exist at path: $imagePath")
       }
       val detector = getOrCreateRegionDetector()
-      val bitmap = BitmapFactory.decodeFile(imagePath)
-        ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
-      val correctedBitmap = applyExifOrientation(bitmap, imagePath)
+      val decoded = decodeImage(
+        imagePath,
+        REGION_MAX_DIMENSION,
+        REGION_MAX_PIXELS
+      )
+      val scaleX = decoded.orientedWidth.toFloat() / decoded.bitmap.width
+      val scaleY = decoded.orientedHeight.toFloat() / decoded.bitmap.height
 
       try {
-        val regions = detector.detect(correctedBitmap).map { candidate ->
+        val regions = detector.detect(decoded.bitmap).map { candidate ->
           mapOf<String, Any>(
             "confidence" to candidate.score.toDouble(),
             "points" to candidate.box.points.map { point ->
-              mapOf("x" to point.x.toDouble(), "y" to point.y.toDouble())
+              mapOf(
+                "x" to (point.x * scaleX).toDouble(),
+                "y" to (point.y * scaleY).toDouble()
+              )
             }
           )
         }
         return mapOf(
           "regions" to regions,
-          "imageWidth" to correctedBitmap.width,
-          "imageHeight" to correctedBitmap.height
+          "imageWidth" to decoded.orientedWidth,
+          "imageHeight" to decoded.orientedHeight
         )
       } finally {
-        if (correctedBitmap !== bitmap && !bitmap.isRecycled) {
-          bitmap.recycle()
-        }
-        if (!correctedBitmap.isRecycled) {
-          correctedBitmap.recycle()
+        if (!decoded.bitmap.isRecycled) {
+          decoded.bitmap.recycle()
         }
       }
     } finally {
@@ -441,9 +455,11 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
           }
         }
 
-        val bitmap = BitmapFactory.decodeFile(imagePath)
-            ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
-        val correctedBitmap = applyExifOrientation(bitmap, imagePath)
+        val decoded = decodeImage(
+          imagePath,
+          FULL_OCR_MAX_DIMENSION,
+          FULL_OCR_MAX_PIXELS
+        )
 
         val cacheDir = File(context.cacheDir, "mobile_ocr_display").apply {
           if (!exists()) {
@@ -455,18 +471,17 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
           .joinToString("") { "%02x".format(it) }
         val cacheFile = File(cacheDir, "img_$hash.png")
 
-        FileOutputStream(cacheFile).use { stream ->
-          val success = correctedBitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
-          if (!success) {
-            throw IllegalStateException("Failed to encode PNG for $imagePath")
+        try {
+          FileOutputStream(cacheFile).use { stream ->
+            val success = decoded.bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+            if (!success) {
+              throw IllegalStateException("Failed to encode PNG for $imagePath")
+            }
           }
-        }
-
-        if (correctedBitmap !== bitmap && !bitmap.isRecycled) {
-          bitmap.recycle()
-        }
-        if (!correctedBitmap.isRecycled) {
-          correctedBitmap.recycle()
+        } finally {
+          if (!decoded.bitmap.isRecycled) {
+            decoded.bitmap.recycle()
+          }
         }
 
         displayableImageCache[cacheKey] = ImageCacheEntry(
@@ -480,14 +495,54 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     }
   }
 
-  private fun applyExifOrientation(source: Bitmap, imagePath: String): Bitmap {
-    return runCatching {
-      val exif = ExifInterface(imagePath)
-      val orientation = exif.getAttributeInt(
+  private fun decodeImage(
+    imagePath: String,
+    maxDimension: Int,
+    maxPixels: Long
+  ): DecodedImage {
+    val bounds = BitmapFactory.Options().apply {
+      inJustDecodeBounds = true
+    }
+    BitmapFactory.decodeFile(imagePath, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+      throw IllegalArgumentException("Failed to read image bounds at path: $imagePath")
+    }
+
+    val options = BitmapFactory.Options().apply {
+      inSampleSize = ImageSampling.calculateInSampleSize(
+        bounds.outWidth,
+        bounds.outHeight,
+        maxDimension,
+        maxPixels
+      )
+      inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    val source = BitmapFactory.decodeFile(imagePath, options)
+      ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
+    val orientation = runCatching {
+      ExifInterface(imagePath).getAttributeInt(
         ExifInterface.TAG_ORIENTATION,
         ExifInterface.ORIENTATION_NORMAL
       )
+    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+    val corrected = applyExifOrientation(source, orientation)
+    if (corrected !== source && !source.isRecycled) {
+      source.recycle()
+    }
 
+    val swapsDimensions = orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+      orientation == ExifInterface.ORIENTATION_ROTATE_270 ||
+      orientation == ExifInterface.ORIENTATION_TRANSPOSE ||
+      orientation == ExifInterface.ORIENTATION_TRANSVERSE
+    return DecodedImage(
+      bitmap = corrected,
+      orientedWidth = if (swapsDimensions) bounds.outHeight else bounds.outWidth,
+      orientedHeight = if (swapsDimensions) bounds.outWidth else bounds.outHeight
+    )
+  }
+
+  private fun applyExifOrientation(source: Bitmap, orientation: Int): Bitmap {
+    return runCatching {
       val matrix = Matrix()
       var transformed = true
       when (orientation) {
@@ -510,11 +565,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
       if (!transformed || matrix.isIdentity) {
         source
       } else {
-        Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true).also {
-          if (it != source && !source.isRecycled) {
-            source.recycle()
-          }
-        }
+        Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
       }
     }.getOrDefault(source)
   }
