@@ -1,14 +1,28 @@
 import 'dart:io';
-import 'dart:ui';
 
+import 'package:flutter/services.dart';
 import 'package:mobile_ocr/models/text_block.dart';
 import 'package:mobile_ocr/models/text_region.dart';
 
+import 'models/ocr_exception.dart';
 import 'models/ocr_model.dart';
 
 import 'mobile_ocr_plugin_platform_interface.dart';
 
 export 'models/ocr_model.dart';
+export 'models/ocr_exception.dart';
+
+Future<T> _translatePlatformException<T>(Future<T> Function() operation) async {
+  try {
+    return await operation();
+  } on PlatformException catch (error) {
+    throw OcrException(
+      code: error.code,
+      message: error.message ?? 'OCR operation failed',
+      details: error.details,
+    );
+  }
+}
 
 class MobileOcr {
   Future<String?> getPlatformVersion() {
@@ -24,15 +38,19 @@ class MobileOcr {
     Set<OcrModelComponent>? components,
   }) async {
     final requestedComponents = components ?? OcrModelComponent.values.toSet();
-    final result = await MobileOcrPlatform.instance.prepareModels(
-      components: requestedComponents,
+    final result = await _translatePlatformException(
+      () => MobileOcrPlatform.instance.prepareModels(
+        components: requestedComponents,
+      ),
     );
     return ModelPreparationStatus.fromMap(result);
   }
 
   /// Read the native OCR model state without downloading anything.
   Future<OcrModelAvailability> getModelAvailability() async {
-    final result = await MobileOcrPlatform.instance.getModelAvailability();
+    final result = await _translatePlatformException(
+      MobileOcrPlatform.instance.getModelAvailability,
+    );
     return OcrModelAvailability.fromMap(result);
   }
 
@@ -51,10 +69,12 @@ class MobileOcr {
       throw ArgumentError('Image file does not exist at path: $imagePath');
     }
 
-    final result = await MobileOcrPlatform.instance.detectText(
-      imagePath: file.path,
-      includeAllConfidenceScores: includeAllConfidenceScores,
-      requestId: requestId,
+    final result = await _translatePlatformException(
+      () => MobileOcrPlatform.instance.detectText(
+        imagePath: file.path,
+        includeAllConfidenceScores: includeAllConfidenceScores,
+        requestId: requestId,
+      ),
     );
     return TextDetectionResult.fromMap(result);
   }
@@ -69,16 +89,20 @@ class MobileOcr {
       throw ArgumentError('Image file does not exist at path: $imagePath');
     }
 
-    final result = await MobileOcrPlatform.instance.detectTextRegions(
-      imagePath: file.path,
-      requestId: requestId,
+    final result = await _translatePlatformException(
+      () => MobileOcrPlatform.instance.detectTextRegions(
+        imagePath: file.path,
+        requestId: requestId,
+      ),
     );
     return TextRegionDetectionResult.fromMap(result);
   }
 
   /// Cancel an OCR operation previously started with [requestId].
   Future<void> cancelRequest(String requestId) {
-    return MobileOcrPlatform.instance.cancelRequest(requestId);
+    return _translatePlatformException(
+      () => MobileOcrPlatform.instance.cancelRequest(requestId),
+    );
   }
 
   /// Quickly determine whether the image contains high-confidence text.
@@ -91,7 +115,9 @@ class MobileOcr {
       throw ArgumentError('Image file does not exist at path: $imagePath');
     }
 
-    return MobileOcrPlatform.instance.hasText(imagePath: file.path);
+    return _translatePlatformException(
+      () => MobileOcrPlatform.instance.hasText(imagePath: file.path),
+    );
   }
 }
 

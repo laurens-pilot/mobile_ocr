@@ -71,6 +71,20 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   private class ModelNotReadyException : IllegalStateException(
     "The OCR detector model is not available locally"
   )
+  private class ImageNotFoundException(path: String) : IllegalArgumentException(
+    "Image file does not exist at path: $path"
+  )
+  private class ImageDecodeException(message: String) : IllegalArgumentException(message)
+
+  private fun respondWithError(result: Result, error: Exception, fallbackCode: String) {
+    val code = when (error) {
+      is ModelNotReadyException -> "MODEL_NOT_READY"
+      is ImageNotFoundException -> "IMAGE_NOT_FOUND"
+      is ImageDecodeException -> "IMAGE_DECODE_ERROR"
+      else -> fallbackCode
+    }
+    result.error(code, error.message ?: "OCR operation failed", null)
+  }
 
   override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     channel = MethodChannel(flutterPluginBinding.binaryMessenger, "mobile_ocr")
@@ -154,7 +168,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
             result.error("CANCELLED", "OCR request was cancelled", null)
           } catch (e: Exception) {
             Log.e(TAG, "OCR processing failed for $imagePath", e)
-            result.error("OCR_ERROR", e.message ?: "Could not process image", null)
+            respondWithError(result, e, "RECOGNITION_ERROR")
           }
         }
       }
@@ -176,12 +190,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
             result.error("CANCELLED", "OCR request was cancelled", null)
           } catch (e: Exception) {
             Log.e(TAG, "Text region detection failed for $imagePath", e)
-            val errorCode = if (e is ModelNotReadyException) {
-              "MODEL_NOT_READY"
-            } else {
-              "DETECTION_ERROR"
-            }
-            result.error(errorCode, e.message ?: "Could not detect text regions", null)
+            respondWithError(result, e, "DETECTION_ERROR")
           }
         }
       }
@@ -227,7 +236,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
             result.success(detectionSummary.hasText)
           } catch (e: Exception) {
             Log.e(TAG, "Quick detection failed for $imagePath", e)
-            result.error("DETECTION_ERROR", e.message ?: "Could not analyze image", null)
+            respondWithError(result, e, "DETECTION_ERROR")
           }
         }
       }
@@ -248,7 +257,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
             result.success(resolvedPath)
           } catch (e: Exception) {
             Log.e(TAG, "Failed to prepare displayable image for $imagePath", e)
-            result.error("IMAGE_DECODE_ERROR", e.message ?: "Could not decode image", null)
+            respondWithError(result, e, "IMAGE_DECODE_ERROR")
           }
         }
       }
@@ -287,7 +296,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
 
       val file = java.io.File(imagePath)
       if (!file.exists()) {
-        throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+        throw ImageNotFoundException(imagePath)
       }
 
       val decoded = decodeImage(
@@ -367,7 +376,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
 
       val file = java.io.File(imagePath)
       if (!file.exists()) {
-        throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+        throw ImageNotFoundException(imagePath)
       }
 
       val decoded = decodeImage(
@@ -395,7 +404,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     try {
       val file = File(imagePath)
       if (!file.exists()) {
-        throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+        throw ImageNotFoundException(imagePath)
       }
       val detector = getOrCreateRegionDetector()
       val decoded = decodeImage(
@@ -436,7 +445,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   private fun ensureImageIsDisplayable(imagePath: String): String {
     val file = File(imagePath)
     if (!file.exists()) {
-      throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+      throw ImageNotFoundException(imagePath)
     }
 
     val extension = file.extension.lowercase(Locale.US)
@@ -540,7 +549,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     }
     BitmapFactory.decodeFile(imagePath, bounds)
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-      throw IllegalArgumentException("Failed to read image bounds at path: $imagePath")
+      throw ImageDecodeException("Failed to read image bounds at path: $imagePath")
     }
 
     val options = BitmapFactory.Options().apply {
@@ -553,7 +562,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
       inPreferredConfig = Bitmap.Config.ARGB_8888
     }
     val source = BitmapFactory.decodeFile(imagePath, options)
-      ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
+      ?: throw ImageDecodeException("Failed to decode image at path: $imagePath")
     val orientation = runCatching {
       ExifInterface(imagePath).getAttributeInt(
         ExifInterface.TAG_ORIENTATION,

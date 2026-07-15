@@ -1,6 +1,6 @@
 import 'dart:io';
-import 'dart:ui';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile_ocr/mobile_ocr_plugin.dart';
 import 'package:mobile_ocr/mobile_ocr_plugin_platform_interface.dart';
@@ -172,6 +172,23 @@ void main() {
     expect(availability.recognizerReady, isFalse);
     expect(availability.version, 'test');
   });
+
+  test('native failures surface as OcrException', () async {
+    final tempDir = await Directory.systemTemp.createTemp('mobile_ocr_test');
+    final tempFile = File('${tempDir.path}/image.png');
+    await tempFile.writeAsBytes([0x00]);
+    MobileOcrPlatform.instance = _FailingMobileOcrPlatform();
+
+    expect(
+      () => MobileOcr().detectTextRegions(imagePath: tempFile.path),
+      throwsA(
+        isA<OcrException>()
+            .having((error) => error.code, 'code', 'DETECTION_ERROR')
+            .having((error) => error.message, 'message', 'Vision failed'),
+      ),
+    );
+    await tempDir.delete(recursive: true);
+  });
 }
 
 class _VerifyingMobileOcrPlatform extends MockMobileOcrPlatform {
@@ -182,5 +199,15 @@ class _VerifyingMobileOcrPlatform extends MockMobileOcrPlatform {
   Future<bool> hasText({required String imagePath}) async {
     lastImagePath = imagePath;
     return response;
+  }
+}
+
+class _FailingMobileOcrPlatform extends MockMobileOcrPlatform {
+  @override
+  Future<Map<dynamic, dynamic>> detectTextRegions({
+    required String imagePath,
+    String? requestId,
+  }) {
+    throw PlatformException(code: 'DETECTION_ERROR', message: 'Vision failed');
   }
 }

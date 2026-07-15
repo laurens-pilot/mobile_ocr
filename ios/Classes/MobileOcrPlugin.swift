@@ -41,7 +41,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
         case "ensureImageIsDisplayable":
             guard let arguments = call.arguments as? [String: Any],
                   let imagePath = arguments["imagePath"] as? String else {
-                result(FlutterError(code: "INVALID_ARGUMENTS",
+                result(FlutterError(code: "INVALID_ARGUMENT",
                                     message: "Image path is required",
                                     details: nil))
                 return
@@ -55,7 +55,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
     private func handleTextDetection(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let arguments = call.arguments as? [String: Any],
               let imagePath = arguments["imagePath"] as? String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
+            result(FlutterError(code: "INVALID_ARGUMENT",
                                message: "Image path is required",
                                details: nil))
             return
@@ -76,7 +76,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                                            result: @escaping FlutterResult) {
         guard let arguments = call.arguments as? [String: Any],
               let imagePath = arguments["imagePath"] as? String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
+            result(FlutterError(code: "INVALID_ARGUMENT",
                                message: "Image path is required",
                                details: nil))
             return
@@ -84,9 +84,17 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
         let requestId = arguments["requestId"] as? String
 
         DispatchQueue.global(qos: .userInitiated).async {
+            guard FileManager.default.fileExists(atPath: imagePath) else {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "IMAGE_NOT_FOUND",
+                                       message: "Image file does not exist",
+                                       details: nil))
+                }
+                return
+            }
             guard let image = UIImage(contentsOfFile: imagePath) else {
                 DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                    result(FlutterError(code: "IMAGE_DECODE_ERROR",
                                        message: "Failed to load image from path",
                                        details: nil))
                 }
@@ -108,7 +116,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
 
             guard let cgImage = fixedImage.cgImage else {
                 DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                    result(FlutterError(code: "IMAGE_DECODE_ERROR",
                                        message: "Failed to get CGImage",
                                        details: nil))
                 }
@@ -177,7 +185,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                                       result: @escaping FlutterResult) {
         guard let arguments = call.arguments as? [String: Any],
               let imagePath = arguments["imagePath"] as? String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
+            result(FlutterError(code: "INVALID_ARGUMENT",
                                message: "Image path is required",
                                details: nil))
             return
@@ -197,10 +205,18 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
         // Move processing to background queue
         let workItem = DispatchWorkItem {
             let fileName = URL(fileURLWithPath: imagePath).lastPathComponent
+            guard FileManager.default.fileExists(atPath: imagePath) else {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "IMAGE_NOT_FOUND",
+                                       message: "Image file does not exist",
+                                       details: nil))
+                }
+                return
+            }
             guard let image = UIImage(contentsOfFile: imagePath) else {
                 MobileOcrPlugin.logDebug("detectText load failure for \(fileName)")
                 DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                    result(FlutterError(code: "IMAGE_DECODE_ERROR",
                                        message: "Failed to load image from path",
                                        details: nil))
                 }
@@ -224,7 +240,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             guard let cgImage = fixedImage.cgImage else {
                 MobileOcrPlugin.logDebug("detectText CGImage missing for \(fileName)")
                 DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                    result(FlutterError(code: "IMAGE_DECODE_ERROR",
                                        message: "Failed to get CGImage",
                                        details: nil))
                 }
@@ -248,10 +264,11 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             var observationCount = 0
             var discardedLowConfidence = 0
             var previewSamples: [String] = []
+            var callbackError: Error?
 
             let request = VNRecognizeTextRequest { (request, error) in
                 if let error = error {
-                    print("Text recognition error: \(error.localizedDescription)")
+                    callbackError = error
                     return
                 }
 
@@ -360,6 +377,22 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 }
                 return
             }
+            if request.isCancelled {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "CANCELLED",
+                                       message: "OCR request was cancelled",
+                                       details: nil))
+                }
+                return
+            }
+            if let callbackError = callbackError {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "RECOGNITION_ERROR",
+                                       message: "Text recognition failed",
+                                       details: callbackError.localizedDescription))
+                }
+                return
+            }
             MobileOcrPlugin.logDebug(
                 "detectText finished file=\(fileName)"
                 + " observations=\(observationCount)"
@@ -452,10 +485,18 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             guard let self = self else { return }
             let fileName = URL(fileURLWithPath: imagePath).lastPathComponent
 
+            guard FileManager.default.fileExists(atPath: imagePath) else {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "IMAGE_NOT_FOUND",
+                                       message: "Image file does not exist",
+                                       details: nil))
+                }
+                return
+            }
             guard let image = UIImage(contentsOfFile: imagePath) else {
                 MobileOcrPlugin.logDebug("hasText load failure for \(fileName)")
                 DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                    result(FlutterError(code: "IMAGE_DECODE_ERROR",
                                        message: "Failed to load image from path",
                                        details: nil))
                 }
@@ -486,7 +527,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             guard let cgImage = fixedImage.cgImage else {
                 MobileOcrPlugin.logDebug("hasText CGImage missing for \(fileName)")
                 DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                    result(FlutterError(code: "IMAGE_DECODE_ERROR",
                                        message: "Failed to get CGImage",
                                        details: nil))
                 }
@@ -500,12 +541,13 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             var rejectedByConfidence = 0
             var rejectedByValidation = 0
             var validationSamples: [String] = []
+            var callbackError: Error?
 
             // Use VNRecognizeTextRequest (same as detectText) instead of VNDetectTextRectanglesRequest
             // This ensures consistency between hasText and detectText
             let request = VNRecognizeTextRequest { (request, error) in
                 if let error = error {
-                    print("hasText - Text recognition error: \(error.localizedDescription)")
+                    callbackError = error
                     return
                 }
 
@@ -574,6 +616,14 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 }
                 return
             }
+            if let callbackError = callbackError {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "DETECTION_ERROR",
+                                       message: "Text detection failed",
+                                       details: callbackError.localizedDescription))
+                }
+                return
+            }
             MobileOcrPlugin.logDebug(
                 "hasText finished file=\(fileName)"
                 + " observations=\(observationCount)"
@@ -595,7 +645,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
         guard let arguments = call.arguments as? [String: Any],
               let requestId = arguments["requestId"] as? String,
               !requestId.isEmpty else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
+            result(FlutterError(code: "INVALID_ARGUMENT",
                                message: "Request ID is required",
                                details: nil))
             return
