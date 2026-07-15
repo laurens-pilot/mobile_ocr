@@ -193,7 +193,7 @@ class OcrProcessor(
 
         val characterBoxesPerDetection = recognitionResults.mapIndexed { index, result ->
             checkCancellation()
-            buildCharacterBoxes(
+            CharacterBoxGeometry.build(
                 detectionResult[index],
                 result.characterSpans,
                 rotationStates[index]
@@ -360,65 +360,6 @@ class OcrProcessor(
     private fun cropTextRegion(bitmap: Bitmap, box: TextBox): Bitmap {
         val orderedPoints = ImageUtils.orderPointsClockwise(box.points)
         return ImageUtils.cropTextRegion(bitmap, orderedPoints)
-    }
-
-    private fun buildCharacterBoxes(
-        textBox: TextBox,
-        spans: List<CharacterSpan>,
-        rotated: Boolean
-    ): List<CharacterBox> {
-        if (spans.isEmpty()) {
-            return emptyList()
-        }
-
-        val ordered = ImageUtils.orderPointsClockwise(textBox.points)
-        if (ordered.size != 4) {
-            return emptyList()
-        }
-
-        val topLeft = ordered[0]
-        val topRight = ordered[1]
-        val bottomRight = ordered[2]
-        val bottomLeft = ordered[3]
-
-        val epsilon = 1e-4f
-
-        return spans.mapNotNull { span ->
-            var start = span.startRatio
-            var end = span.endRatio
-
-            if (rotated) {
-                val reversedStart = 1f - end
-                val reversedEnd = 1f - start
-                start = reversedStart.coerceIn(0f, 1f)
-                end = reversedEnd.coerceIn(start + epsilon, 1f)
-            }
-
-            val clampedStart = start.coerceIn(0f, 1f)
-            val clampedEnd = end.coerceIn(clampedStart + epsilon, 1f)
-            if (clampedEnd - clampedStart <= epsilon) {
-                return@mapNotNull null
-            }
-
-            val topStart = interpolate(topLeft, topRight, clampedStart)
-            val topEnd = interpolate(topLeft, topRight, clampedEnd)
-            val bottomStart = interpolate(bottomLeft, bottomRight, clampedStart)
-            val bottomEnd = interpolate(bottomLeft, bottomRight, clampedEnd)
-
-            CharacterBox(
-                text = span.text,
-                confidence = span.confidence,
-                points = listOf(topStart, topEnd, bottomEnd, bottomStart)
-            )
-        }
-    }
-
-    private fun interpolate(start: PointF, end: PointF, ratio: Float): PointF {
-        val clamped = ratio.coerceIn(0f, 1f)
-        return PointF(
-            start.x + (end.x - start.x) * clamped,
-            start.y + (end.y - start.y) * clamped
-        )
     }
 
     private fun classifyAndRotateIndices(

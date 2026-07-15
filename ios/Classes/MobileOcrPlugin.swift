@@ -6,6 +6,7 @@ import Vision
 public class MobileOcrPlugin: NSObject, FlutterPlugin {
     private let requestLock = NSLock()
     private var activeRequests: [String: VNRequest] = [:]
+    private var cancelledRequestIds: Set<String> = []
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "mobile_ocr", binaryMessenger: registrar.messenger())
@@ -152,7 +153,6 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             }
             request.reportCharacterBoxes = false
             self.register(request, requestId: requestId)
-            defer { self.finishRequest(request, requestId: requestId) }
 
             do {
                 try VNImageRequestHandler(cgImage: cgImage, options: [:])
@@ -160,9 +160,13 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             } catch {
                 callbackError = error
             }
+            let requestWasCancelled = self.finishRequest(
+                request,
+                requestId: requestId
+            )
 
             DispatchQueue.main.async {
-                if request.isCancelled {
+                if requestWasCancelled {
                     result(FlutterError(code: "CANCELLED",
                                        message: "OCR request was cancelled",
                                        details: nil))
@@ -327,10 +331,11 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                         ["x": Double(bottomLeft.x), "y": Double(bottomLeft.y)]
                     ]
 
-                    // Character-level bounding boxes (iOS 16+ only)
-                    let characterEntries: [[String: Any]] = []
-                    // TODO: Re-enable when minimum iOS version is 16+
-                    // Character boxes require iOS 16+ API that's not available in current build
+                    let characterEntries = self.characterEntries(
+                        for: topCandidate,
+                        imageWidth: imageWidth,
+                        imageHeight: imageHeight
+                    )
 
                     detectedTexts.append([
                         "text": topCandidate.string,
@@ -341,7 +346,6 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 }
             }
             self.register(request, requestId: requestId)
-            defer { self.finishRequest(request, requestId: requestId) }
 
             // Configure request for best accuracy
             request.recognitionLevel = .accurate
@@ -370,14 +374,13 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             do {
                 try requestHandler.perform([request])
             } catch {
-                DispatchQueue.main.async {
-                    result(FlutterError(code: "RECOGNITION_ERROR",
-                                       message: "Failed to perform text recognition",
-                                       details: error.localizedDescription))
-                }
-                return
+                callbackError = error
             }
-            if request.isCancelled {
+            let requestWasCancelled = self.finishRequest(
+                request,
+                requestId: requestId
+            )
+            if requestWasCancelled {
                 DispatchQueue.main.async {
                     result(FlutterError(code: "CANCELLED",
                                        message: "OCR request was cancelled",
@@ -437,20 +440,44 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
 
             // Return results on main thread
             DispatchQueue.main.async {
-                if request.isCancelled {
-                    result(FlutterError(code: "CANCELLED",
-                                       message: "OCR request was cancelled",
-                                       details: nil))
-                } else {
-                    result([
-                        "blocks": detectedTexts,
-                        "imageWidth": cgImage.width,
-                        "imageHeight": cgImage.height
-                    ] as [String: Any])
-                }
+                result([
+                    "blocks": detectedTexts,
+                    "imageWidth": cgImage.width,
+                    "imageHeight": cgImage.height
+                ] as [String: Any])
             }
         }
         DispatchQueue.global(qos: .userInitiated).async(execute: workItem)
+    }
+
+    private func characterEntries(for candidate: VNRecognizedText,
+                                  imageWidth: CGFloat,
+                                  imageHeight: CGFloat) -> [[String: Any]] {
+        var entries: [[String: Any]] = []
+        var start = candidate.string.startIndex
+        while start < candidate.string.endIndex {
+            let end = candidate.string.index(after: start)
+            let range = start..<end
+            if let observation = try? candidate.boundingBox(for: range) {
+                let points: [[String: Double]] = [
+                    ["x": Double(observation.topLeft.x * imageWidth),
+                     "y": Double((1 - observation.topLeft.y) * imageHeight)],
+                    ["x": Double(observation.topRight.x * imageWidth),
+                     "y": Double((1 - observation.topRight.y) * imageHeight)],
+                    ["x": Double(observation.bottomRight.x * imageWidth),
+                     "y": Double((1 - observation.bottomRight.y) * imageHeight)],
+                    ["x": Double(observation.bottomLeft.x * imageWidth),
+                     "y": Double((1 - observation.bottomLeft.y) * imageHeight)]
+                ]
+                entries.append([
+                    "text": String(candidate.string[range]),
+                    "confidence": candidate.confidence,
+                    "points": points
+                ])
+            }
+            start = end
+        }
+        return entries
     }
 
     // Helper to validate if text looks meaningful (not just symbols/noise)
@@ -652,6 +679,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
         }
         requestLock.lock()
         let request = activeRequests.removeValue(forKey: requestId)
+        cancelledRequestIds.insert(requestId)
         requestLock.unlock()
         request?.cancel()
         result(nil)
@@ -660,18 +688,21 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
     private func register(_ request: VNRequest, requestId: String?) {
         guard let requestId = requestId else { return }
         requestLock.lock()
+        cancelledRequestIds.remove(requestId)
         let previous = activeRequests.updateValue(request, forKey: requestId)
         requestLock.unlock()
         previous?.cancel()
     }
 
-    private func finishRequest(_ request: VNRequest, requestId: String?) {
-        guard let requestId = requestId else { return }
+    private func finishRequest(_ request: VNRequest, requestId: String?) -> Bool {
+        guard let requestId = requestId else { return false }
         requestLock.lock()
         if activeRequests[requestId] === request {
             activeRequests.removeValue(forKey: requestId)
         }
+        let wasCancelled = cancelledRequestIds.remove(requestId) != nil
         requestLock.unlock()
+        return wasCancelled
     }
 
     private static func logDebug(_ message: String) {
