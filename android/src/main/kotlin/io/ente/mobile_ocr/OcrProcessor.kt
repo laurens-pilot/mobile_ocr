@@ -113,25 +113,34 @@ class OcrProcessor(
         }
     }
 
-    fun processImage(bitmap: Bitmap, includeAllConfidenceScores: Boolean = false): OcrResult {
+    fun processImage(
+        bitmap: Bitmap,
+        includeAllConfidenceScores: Boolean = false,
+        checkCancellation: () -> Unit = {}
+    ): OcrResult {
         // Step 1: Text Detection
         val detectionResult = detectText(bitmap)
+        checkCancellation()
 
         if (detectionResult.isEmpty()) {
             return OcrResult(emptyList(), emptyList(), emptyList(), emptyList())
         }
 
-        // Step 2: Crop text regions
-        val croppedImages = detectionResult.mapIndexed { index, box ->
-            val cropped = cropTextRegion(bitmap, box)
-            saveDebugBitmap(cropped, "crop", index, "raw")
-            cropped
-        }.toMutableList()
+        val croppedImages = mutableListOf<Bitmap>()
+        try {
+            // Step 2: Crop text regions
+            detectionResult.forEachIndexed { index, box ->
+                checkCancellation()
+                val cropped = cropTextRegion(bitmap, box)
+                saveDebugBitmap(cropped, "crop", index, "raw")
+                croppedImages.add(cropped)
+            }
 
         val classificationMask = BooleanArray(croppedImages.size)
         val rotationStates = BooleanArray(croppedImages.size)
 
         if (useAngleClassification) {
+            checkCancellation()
             val aspectCandidates = croppedImages.mapIndexedNotNull { index, image ->
                 val aspectRatio = image.width.toFloat() / image.height
                 if (aspectRatio < ANGLE_ASPECT_RATIO_THRESHOLD) index else null
@@ -146,7 +155,9 @@ class OcrProcessor(
         }
 
         // Step 3: Text recognition
+        checkCancellation()
         val recognitionResults = recognizeText(croppedImages).toMutableList()
+        checkCancellation()
 
         if (useAngleClassification && recognitionResults.isNotEmpty()) {
             val lowConfidenceIndices = recognitionResults.mapIndexedNotNull { index, result ->
@@ -154,6 +165,7 @@ class OcrProcessor(
             }
 
             if (lowConfidenceIndices.isNotEmpty()) {
+                checkCancellation()
                 classifyAndRotateIndices(
                     croppedImages,
                     lowConfidenceIndices,
@@ -162,6 +174,7 @@ class OcrProcessor(
                     "angle_confidence"
                 )
                 val refreshed = recognizeText(lowConfidenceIndices.map { croppedImages[it] })
+                checkCancellation()
                 lowConfidenceIndices.forEachIndexed { refreshedIndex, originalIndex ->
                     val current = recognitionResults[originalIndex]
                     val updated = refreshed[refreshedIndex]
@@ -179,6 +192,7 @@ class OcrProcessor(
         }
 
         val characterBoxesPerDetection = recognitionResults.mapIndexed { index, result ->
+            checkCancellation()
             buildCharacterBoxes(
                 detectionResult[index],
                 result.characterSpans,
@@ -214,7 +228,14 @@ class OcrProcessor(
             )
         }
 
-        return OcrResult(filteredResults, filteredTexts, filteredScores, filteredCharacters)
+            return OcrResult(filteredResults, filteredTexts, filteredScores, filteredCharacters)
+        } finally {
+            croppedImages.forEach { crop ->
+                if (!crop.isRecycled) {
+                    crop.recycle()
+                }
+            }
+        }
     }
 
     private fun detectText(bitmap: Bitmap): List<TextBox> {
@@ -227,44 +248,53 @@ class OcrProcessor(
         val crops = mutableListOf(crop)
         val classificationMask = BooleanArray(1)
         val rotationStates = BooleanArray(1)
+        try {
 
-        if (useAngleClassification) {
-            val aspectRatio = crop.width.toFloat() / crop.height
-            val aspectCandidates = if (aspectRatio < ANGLE_ASPECT_RATIO_THRESHOLD) listOf(0) else emptyList()
-            classifyAndRotateIndices(
-                crops,
-                aspectCandidates,
-                classificationMask,
-                rotationStates,
-                "angle_aspect_quick"
-            )
-        }
-
-        var recognitionResults = recognizeText(crops)
-        if (useAngleClassification && recognitionResults.isNotEmpty()) {
-            val needsRetry = !classificationMask[0] && recognitionResults[0].confidence < LOW_CONFIDENCE_THRESHOLD
-            if (needsRetry) {
+            if (useAngleClassification) {
+                val aspectRatio = crop.width.toFloat() / crop.height
+                val aspectCandidates = if (aspectRatio < ANGLE_ASPECT_RATIO_THRESHOLD) listOf(0) else emptyList()
                 classifyAndRotateIndices(
                     crops,
-                    listOf(0),
+                    aspectCandidates,
                     classificationMask,
                     rotationStates,
-                    "angle_confidence_quick"
+                    "angle_aspect_quick"
                 )
-                val refreshed = recognizeText(crops)
-                if (refreshed.isNotEmpty() && refreshed[0].confidence > recognitionResults[0].confidence) {
-                    recognitionResults = refreshed
+            }
+
+            var recognitionResults = recognizeText(crops)
+            if (useAngleClassification && recognitionResults.isNotEmpty()) {
+                val needsRetry = !classificationMask[0] && recognitionResults[0].confidence < LOW_CONFIDENCE_THRESHOLD
+                if (needsRetry) {
+                    classifyAndRotateIndices(
+                        crops,
+                        listOf(0),
+                        classificationMask,
+                        rotationStates,
+                        "angle_confidence_quick"
+                    )
+                    val refreshed = recognizeText(crops)
+                    if (refreshed.isNotEmpty() && refreshed[0].confidence > recognitionResults[0].confidence) {
+                        recognitionResults = refreshed
+                    }
+                }
+            }
+
+            return recognitionResults.firstOrNull()
+        } finally {
+            crops.forEach { image ->
+                if (!image.isRecycled) {
+                    image.recycle()
                 }
             }
         }
-
-        return recognitionResults.firstOrNull()
     }
 
     fun hasHighConfidenceText(
         bitmap: Bitmap,
         minimumDetectionConfidence: Float = 0.9f,
-        recognitionThreshold: Float = MIN_RECOGNITION_SCORE
+        recognitionThreshold: Float = MIN_RECOGNITION_SCORE,
+        checkCancellation: () -> Unit = {}
     ): QuickCheckResult {
         val processor = TextDetector(detectionSession, ortEnv)
         val detectionSummary = processor.collectHighConfidenceDetections(
@@ -272,6 +302,7 @@ class OcrProcessor(
             minimumDetectionConfidence = minimumDetectionConfidence,
             maxCandidates = QUICK_CHECK_MAX_CANDIDATES
         )
+        checkCancellation()
 
         if (detectionSummary.candidates.isEmpty()) {
             return QuickCheckResult(
@@ -294,6 +325,7 @@ class OcrProcessor(
         var bestRecognitionScore = Float.NEGATIVE_INFINITY
 
         for (candidate in detectionSummary.candidates) {
+            checkCancellation()
             evaluated++
             val recognition = recognizeCandidate(bitmap, candidate.box)
             if (recognition != null) {

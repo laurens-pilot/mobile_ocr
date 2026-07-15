@@ -308,9 +308,15 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
       val imageHeight = decoded.orientedHeight
       val scaleX = imageWidth.toFloat() / decoded.bitmap.width
       val scaleY = imageHeight.toFloat() / decoded.bitmap.height
+      val requestJob = currentCoroutineContext()[Job]
 
       val ocrResults = try {
-        processor.processImage(decoded.bitmap, includeAllConfidenceScores)
+        processor.processImage(
+          decoded.bitmap,
+          includeAllConfidenceScores
+        ) {
+          requestJob?.ensureActive()
+        }
       } finally {
         if (!decoded.bitmap.isRecycled) {
           decoded.bitmap.recycle()
@@ -384,8 +390,14 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         REGION_MAX_DIMENSION,
         REGION_MAX_PIXELS
       )
+      val requestJob = currentCoroutineContext()[Job]
       return try {
-        processor.hasHighConfidenceText(decoded.bitmap, minDetectionConfidence)
+        processor.hasHighConfidenceText(
+          decoded.bitmap,
+          minDetectionConfidence
+        ) {
+          requestJob?.ensureActive()
+        }
       } finally {
         if (!decoded.bitmap.isRecycled) {
           decoded.bitmap.recycle()
