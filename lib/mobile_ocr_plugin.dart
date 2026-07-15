@@ -11,6 +11,7 @@ import 'mobile_ocr_plugin_platform_interface.dart';
 
 export 'models/ocr_model.dart';
 export 'models/ocr_exception.dart';
+export 'models/text_region.dart';
 
 Future<T> _translatePlatformException<T>(Future<T> Function() operation) async {
   try {
@@ -105,10 +106,12 @@ class MobileOcr {
     );
   }
 
-  /// Quickly determine whether the image contains high-confidence text.
+  /// Compatibility check for whether recognition finds high-confidence text.
   ///
-  /// Returns `true` if at least one detected text block has confidence >= 0.9.
-  /// Only the detection stage runs, making this faster than full recognition.
+  /// Android runs detection and recognition on up to three candidate regions;
+  /// iOS runs a Vision recognition request. Use [detectTextRegions] when a
+  /// detector-only routing signal is sufficient.
+  @Deprecated('Use detectTextRegions() for a detector-only routing signal.')
   Future<bool> hasText({required String imagePath}) async {
     final file = File(imagePath);
     if (!file.existsSync()) {

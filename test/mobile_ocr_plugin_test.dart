@@ -6,7 +6,6 @@ import 'package:mobile_ocr/mobile_ocr_plugin.dart';
 import 'package:mobile_ocr/mobile_ocr_plugin_platform_interface.dart';
 import 'package:mobile_ocr/mobile_ocr_plugin_method_channel.dart';
 import 'package:mobile_ocr/models/text_block.dart';
-import 'package:mobile_ocr/models/text_region.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 class MockMobileOcrPlatform
@@ -124,6 +123,7 @@ void main() {
   test('hasText validates image path exists', () async {
     final mobileOcr = MobileOcr();
     expect(
+      // ignore: deprecated_member_use_from_same_package
       () => mobileOcr.hasText(imagePath: '/tmp/does_not_exist.png'),
       throwsArgumentError,
     );
@@ -139,6 +139,7 @@ void main() {
     verifyingPlatform.response = true;
     MobileOcrPlatform.instance = verifyingPlatform;
 
+    // ignore: deprecated_member_use_from_same_package
     final result = await mobileOcr.hasText(imagePath: tempFile.path);
     expect(result, isTrue);
     expect(verifyingPlatform.lastImagePath, tempFile.path);
