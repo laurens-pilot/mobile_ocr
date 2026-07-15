@@ -1,16 +1,11 @@
-// This is a basic Flutter integration test.
-//
-// Since integration tests run in a full Flutter application, they can interact
-// with the host side of a plugin implementation, unlike Dart unit tests.
-//
-// For more information about Flutter integration tests, please see
-// https://flutter.dev/to/integration-testing
+import 'dart:io';
 
-
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-
 import 'package:mobile_ocr/mobile_ocr_plugin.dart';
+
+const bool _runNativeOcrSmoke = bool.fromEnvironment('OCR_NATIVE_SMOKE');
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -18,8 +13,68 @@ void main() {
   testWidgets('getPlatformVersion test', (WidgetTester tester) async {
     final MobileOcr plugin = MobileOcr();
     final String? version = await plugin.getPlatformVersion();
-    // The version string depends on the host platform running the test, so
-    // just assert that some non-empty string is returned.
     expect(version?.isNotEmpty, true);
   });
+
+  testWidgets(
+    'detector-only and full OCR run on a bundled sample',
+    (WidgetTester tester) async {
+      final plugin = MobileOcr();
+      final data = await rootBundle.load('assets/test_ocr/ocr_test.jpeg');
+      final image = File('${Directory.systemTemp.path}/ocr_test.jpeg');
+      await image.writeAsBytes(
+        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        flush: true,
+      );
+      addTearDown(() async {
+        if (await image.exists()) {
+          await image.delete();
+        }
+      });
+
+      final detectorPreparation = Stopwatch()..start();
+      final detectorStatus = await plugin.prepareModels(
+        components: {OcrModelComponent.detector},
+      );
+      detectorPreparation.stop();
+      expect(detectorStatus.isReady, isTrue);
+
+      final availability = await plugin.getModelAvailability();
+      expect(availability.detectorReady, isTrue);
+
+      final regionDetection = Stopwatch()..start();
+      final regions = await plugin.detectTextRegions(imagePath: image.path);
+      regionDetection.stop();
+      expect(regions.imageSize.width, greaterThan(0));
+      expect(regions.imageSize.height, greaterThan(0));
+      expect(regions.regions, isNotEmpty);
+
+      final fullPreparation = Stopwatch()..start();
+      final fullStatus = await plugin.prepareModels();
+      fullPreparation.stop();
+      expect(fullStatus.isReady, isTrue);
+
+      final recognition = Stopwatch()..start();
+      final result = await plugin.detectText(imagePath: image.path);
+      recognition.stop();
+      expect(result.blocks, isNotEmpty);
+      expect(
+        result.blocks.map((block) => block.text).join(' ').toLowerCase(),
+        contains('restaurant'),
+      );
+
+      // Printed values are retained by `flutter test -d` for device profiling.
+      // ignore: avoid_print
+      print(
+        'OCR_SMOKE detectorPrepareMs=${detectorPreparation.elapsedMilliseconds} '
+        'regionsMs=${regionDetection.elapsedMilliseconds} '
+        'regionCount=${regions.regions.length} '
+        'fullPrepareMs=${fullPreparation.elapsedMilliseconds} '
+        'recognitionMs=${recognition.elapsedMilliseconds} '
+        'blockCount=${result.blocks.length}',
+      );
+    },
+    skip: !_runNativeOcrSmoke,
+    timeout: const Timeout(Duration(minutes: 10)),
+  );
 }
