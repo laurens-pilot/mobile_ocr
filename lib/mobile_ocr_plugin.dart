@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:mobile_ocr/models/text_block.dart';
+import 'package:mobile_ocr/models/text_region.dart';
 
 import 'mobile_ocr_plugin_platform_interface.dart';
 
@@ -41,6 +42,21 @@ class MobileOcr {
     return TextDetectionResult.fromMap(result);
   }
 
+  /// Detect likely text regions without recognizing their contents.
+  Future<TextRegionDetectionResult> detectTextRegions({
+    required String imagePath,
+  }) async {
+    final file = File(imagePath);
+    if (!file.existsSync()) {
+      throw ArgumentError('Image file does not exist at path: $imagePath');
+    }
+
+    final result = await MobileOcrPlatform.instance.detectTextRegions(
+      imagePath: file.path,
+    );
+    return TextRegionDetectionResult.fromMap(result);
+  }
+
   /// Quickly determine whether the image contains high-confidence text.
   ///
   /// Returns `true` if at least one detected text block has confidence >= 0.9.
@@ -64,7 +80,8 @@ class TextDetectionResult {
   TextDetectionResult({required this.blocks, required this.imageSize});
 
   factory TextDetectionResult.fromMap(Map<dynamic, dynamic> map) {
-    final blocksList = (map['blocks'] as List?)?.cast<Map<dynamic, dynamic>>() ?? const [];
+    final blocksList =
+        (map['blocks'] as List?)?.cast<Map<dynamic, dynamic>>() ?? const [];
     final blocks = blocksList.map(TextBlock.fromMap).toList(growable: false);
     final imageWidth = (map['imageWidth'] as num?)?.toDouble() ?? 0.0;
     final imageHeight = (map['imageHeight'] as num?)?.toDouble() ?? 0.0;

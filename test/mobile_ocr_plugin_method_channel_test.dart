@@ -33,6 +33,22 @@ void main() {
               };
             case 'hasText':
               return true;
+            case 'detectTextRegions':
+              return {
+                'regions': [
+                  {
+                    'confidence': 0.75,
+                    'points': [
+                      {'x': 1.0, 'y': 2.0},
+                      {'x': 11.0, 'y': 2.0},
+                      {'x': 11.0, 'y': 7.0},
+                      {'x': 1.0, 'y': 7.0},
+                    ],
+                  },
+                ],
+                'imageWidth': 100,
+                'imageHeight': 200,
+              };
             default:
               return null;
           }
@@ -64,5 +80,12 @@ void main() {
   test('hasText returns boolean result', () async {
     final result = await platform.hasText(imagePath: '/tmp/test.png');
     expect(result, isTrue);
+  });
+
+  test('detectTextRegions forwards path', () async {
+    final result = await platform.detectTextRegions(imagePath: '/tmp/test.png');
+    expect(result['regions'], hasLength(1));
+    expect(result['imageWidth'], 100);
+    expect(result['imageHeight'], 200);
   });
 }

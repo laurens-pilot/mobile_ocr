@@ -30,11 +30,13 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   private lateinit var channel : MethodChannel
   private lateinit var context: Context
   private var ocrProcessor: OcrProcessor? = null
+  private var textRegionDetector: TextRegionDetector? = null
   private val mainScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
   private lateinit var modelManager: ModelManager
   private var cachedModelFiles: ModelFiles? = null
   private val modelMutex = Mutex()
   private val processorMutex = Mutex()
+  private val regionDetectorMutex = Mutex()
   private val displayableCacheMutex = Mutex()
   private val displayableImageCache = mutableMapOf<String, ImageCacheEntry>()
   private val activeTasks = AtomicInteger(0)
@@ -99,6 +101,25 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
           } catch (e: Exception) {
             Log.e(TAG, "OCR processing failed for $imagePath", e)
             result.error("OCR_ERROR", e.message ?: "Could not process image", null)
+          }
+        }
+      }
+      "detectTextRegions" -> {
+        val imagePath = call.argument<String>("imagePath")
+        if (imagePath.isNullOrBlank()) {
+          result.error("INVALID_ARGUMENT", "Image path is required", null)
+          return
+        }
+
+        mainScope.launch {
+          try {
+            val regionResult = withContext(Dispatchers.IO) {
+              detectTextRegions(imagePath)
+            }
+            result.success(regionResult)
+          } catch (e: Exception) {
+            Log.e(TAG, "Text region detection failed for $imagePath", e)
+            result.error("DETECTION_ERROR", e.message ?: "Could not detect text regions", null)
           }
         }
       }
@@ -276,6 +297,48 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     }
   }
 
+  private suspend fun detectTextRegions(imagePath: String): Map<String, Any> {
+    if (shuttingDown) {
+      throw IllegalStateException("Plugin is shutting down")
+    }
+    activeTasks.incrementAndGet()
+    try {
+      val file = File(imagePath)
+      if (!file.exists()) {
+        throw IllegalArgumentException("Image file does not exist at path: $imagePath")
+      }
+      val detector = getOrCreateRegionDetector()
+      val bitmap = BitmapFactory.decodeFile(imagePath)
+        ?: throw IllegalArgumentException("Failed to decode image at path: $imagePath")
+      val correctedBitmap = applyExifOrientation(bitmap, imagePath)
+
+      try {
+        val regions = detector.detect(correctedBitmap).map { candidate ->
+          mapOf<String, Any>(
+            "confidence" to candidate.score.toDouble(),
+            "points" to candidate.box.points.map { point ->
+              mapOf("x" to point.x.toDouble(), "y" to point.y.toDouble())
+            }
+          )
+        }
+        return mapOf(
+          "regions" to regions,
+          "imageWidth" to correctedBitmap.width,
+          "imageHeight" to correctedBitmap.height
+        )
+      } finally {
+        if (correctedBitmap !== bitmap && !bitmap.isRecycled) {
+          bitmap.recycle()
+        }
+        if (!correctedBitmap.isRecycled) {
+          correctedBitmap.recycle()
+        }
+      }
+    } finally {
+      activeTasks.decrementAndGet()
+    }
+  }
+
   private fun ensureImageIsDisplayable(imagePath: String): String {
     val file = File(imagePath)
     if (!file.exists()) {
@@ -396,6 +459,10 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         ocrProcessor?.close()
         ocrProcessor = null
       }
+      regionDetectorMutex.withLock {
+        textRegionDetector?.close()
+        textRegionDetector = null
+      }
       modelMutex.withLock {
         cachedModelFiles = null
       }
@@ -417,6 +484,16 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     return processorMutex.withLock {
       ocrProcessor ?: OcrProcessor(context, modelFiles).also { created ->
         ocrProcessor = created
+      }
+    }
+  }
+
+  private suspend fun getOrCreateRegionDetector(): TextRegionDetector {
+    return regionDetectorMutex.withLock {
+      textRegionDetector ?: TextRegionDetector(
+        modelManager.ensureDetectionModel()
+      ).also { created ->
+        textRegionDetector = created
       }
     }
   }

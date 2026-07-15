@@ -22,27 +22,30 @@ class MethodChannelMobileOcr extends MobileOcrPlatform {
     required String imagePath,
     bool includeAllConfidenceScores = false,
   }) async {
-    final result =
-        await methodChannel.invokeMapMethod<dynamic, dynamic>(
-      'detectText',
-      {
-        'imagePath': imagePath,
-        'includeAllConfidenceScores': includeAllConfidenceScores,
-      },
+    final result = await methodChannel
+        .invokeMapMethod<dynamic, dynamic>('detectText', {
+          'imagePath': imagePath,
+          'includeAllConfidenceScores': includeAllConfidenceScores,
+        });
+    return result ?? const {};
+  }
+
+  @override
+  Future<Map<dynamic, dynamic>> detectTextRegions({
+    required String imagePath,
+  }) async {
+    final result = await methodChannel.invokeMapMethod<dynamic, dynamic>(
+      'detectTextRegions',
+      {'imagePath': imagePath},
     );
     return result ?? const {};
   }
 
   @override
-  Future<bool> hasText({
-    required String imagePath,
-  }) async {
-    final result = await methodChannel.invokeMethod<bool>(
-      'hasText',
-      {
-        'imagePath': imagePath,
-      },
-    );
+  Future<bool> hasText({required String imagePath}) async {
+    final result = await methodChannel.invokeMethod<bool>('hasText', {
+      'imagePath': imagePath,
+    });
     return result ?? false;
   }
 

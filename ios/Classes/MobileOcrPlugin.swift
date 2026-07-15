@@ -23,6 +23,8 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             ])
         case "detectText":
             handleTextDetection(call: call, result: result)
+        case "detectTextRegions":
+            handleTextRegionDetection(call: call, result: result)
         case "hasText":
             handleQuickTextCheck(call: call, result: result)
         case "ensureImageIsDisplayable":
@@ -55,6 +57,100 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
         detectTextInImage(imagePath: imagePath,
                          minConfidence: minConfidence,
                          result: result)
+    }
+
+    private func handleTextRegionDetection(call: FlutterMethodCall,
+                                           result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let imagePath = arguments["imagePath"] as? String else {
+            result(FlutterError(code: "INVALID_ARGUMENTS",
+                               message: "Image path is required",
+                               details: nil))
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard let image = UIImage(contentsOfFile: imagePath) else {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                                       message: "Failed to load image from path",
+                                       details: nil))
+                }
+                return
+            }
+
+            var fixedImage = image
+            if image.imageOrientation != .up {
+                let format = UIGraphicsImageRendererFormat.default()
+                format.scale = image.scale
+                format.opaque = false
+                fixedImage = UIGraphicsImageRenderer(
+                    size: image.size,
+                    format: format
+                ).image { _ in
+                    image.draw(in: CGRect(origin: .zero, size: image.size))
+                }
+            }
+
+            guard let cgImage = fixedImage.cgImage else {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                                       message: "Failed to get CGImage",
+                                       details: nil))
+                }
+                return
+            }
+
+            var regions: [[String: Any]] = []
+            var callbackError: Error?
+            let request = VNDetectTextRectanglesRequest { request, error in
+                if let error = error {
+                    callbackError = error
+                    return
+                }
+                let width = CGFloat(cgImage.width)
+                let height = CGFloat(cgImage.height)
+                let observations = request.results as? [VNTextObservation] ?? []
+                regions = observations.map { observation in
+                    let points: [[String: Double]] = [
+                        ["x": Double(observation.topLeft.x * width),
+                         "y": Double((1 - observation.topLeft.y) * height)],
+                        ["x": Double(observation.topRight.x * width),
+                         "y": Double((1 - observation.topRight.y) * height)],
+                        ["x": Double(observation.bottomRight.x * width),
+                         "y": Double((1 - observation.bottomRight.y) * height)],
+                        ["x": Double(observation.bottomLeft.x * width),
+                         "y": Double((1 - observation.bottomLeft.y) * height)]
+                    ]
+                    return [
+                        "confidence": Double(observation.confidence),
+                        "points": points
+                    ]
+                }
+            }
+            request.reportCharacterBoxes = false
+
+            do {
+                try VNImageRequestHandler(cgImage: cgImage, options: [:])
+                    .perform([request])
+            } catch {
+                callbackError = error
+            }
+
+            DispatchQueue.main.async {
+                if let error = callbackError {
+                    result(FlutterError(code: "DETECTION_ERROR",
+                                       message: "Failed to detect text regions",
+                                       details: error.localizedDescription))
+                } else {
+                    result([
+                        "regions": regions,
+                        "imageWidth": cgImage.width,
+                        "imageHeight": cgImage.height
+                    ])
+                }
+            }
+        }
     }
 
     private func handleQuickTextCheck(call: FlutterMethodCall,
