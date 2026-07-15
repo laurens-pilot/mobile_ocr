@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_ocr/models/text_block.dart';
+import 'package:mobile_ocr/src/text_reading_order.dart';
 
 // OCR character boxes tend to overhang slightly on the left edge, so keep the
 // added selection slack slightly right-biased to visually center the highlight.
@@ -1930,7 +1931,19 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
       _blockOrder.add(index);
     }
 
-    _blockOrder.sort(_compareBlockIndices);
+    _blockOrder
+      ..clear()
+      ..addAll(
+        orderTextBlocksForReading(
+          _blockVisuals.values.map(
+            (visual) => TextReadingOrderBlock(
+              index: visual.index,
+              bounds: visual.bounds,
+              text: visual.block.text,
+            ),
+          ),
+        ),
+      );
     _recomputeSelections();
   }
 
@@ -2141,30 +2154,6 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
       start.dx + (end.dx - start.dx) * clamped,
       start.dy + (end.dy - start.dy) * clamped,
     );
-  }
-
-  int _compareBlockIndices(int a, int b) {
-    final visualA = _blockVisuals[a];
-    final visualB = _blockVisuals[b];
-    if (visualA == null || visualB == null) {
-      return a.compareTo(b);
-    }
-
-    final rectA = visualA.bounds;
-    final rectB = visualB.bounds;
-
-    final double verticalDiff = rectA.top - rectB.top;
-    final double verticalThreshold = max(rectA.height, rectB.height) * 0.25;
-    if (verticalDiff.abs() > verticalThreshold) {
-      return verticalDiff < 0 ? -1 : 1;
-    }
-
-    final double horizontalDiff = rectA.left - rectB.left;
-    if (horizontalDiff.abs() > 2) {
-      return horizontalDiff < 0 ? -1 : 1;
-    }
-
-    return a.compareTo(b);
   }
 
   void _clampAnchorsToVisuals() {
