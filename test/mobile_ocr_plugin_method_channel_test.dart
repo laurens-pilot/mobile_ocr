@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile_ocr/mobile_ocr_plugin_method_channel.dart';
+import 'package:mobile_ocr/mobile_ocr_plugin.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -49,6 +50,14 @@ void main() {
                 'imageWidth': 100,
                 'imageHeight': 200,
               };
+            case 'getModelAvailability':
+              return {
+                'detectorReady': true,
+                'recognizerReady': false,
+                'version': 'test',
+              };
+            case 'prepareModels':
+              return {'isReady': true, 'version': 'test', 'modelPath': '/tmp'};
             default:
               return null;
           }
@@ -87,5 +96,18 @@ void main() {
     expect(result['regions'], hasLength(1));
     expect(result['imageWidth'], 100);
     expect(result['imageHeight'], 200);
+  });
+
+  test('getModelAvailability returns component readiness', () async {
+    final result = await platform.getModelAvailability();
+    expect(result['detectorReady'], isTrue);
+    expect(result['recognizerReady'], isFalse);
+  });
+
+  test('prepareModels accepts detector-only preparation', () async {
+    final result = await platform.prepareModels(
+      components: {OcrModelComponent.detector},
+    );
+    expect(result['isReady'], isTrue);
   });
 }

@@ -50,6 +50,10 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
 
   private val transcodableExtensions = setOf("heic", "heif", "heics", "avif")
 
+  private class ModelNotReadyException : IllegalStateException(
+    "The OCR detector model is not available locally"
+  )
+
   override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     channel = MethodChannel(flutterPluginBinding.binaryMessenger, "mobile_ocr")
     channel.setMethodCallHandler(this)
@@ -62,24 +66,53 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
       "prepareModels" -> {
         mainScope.launch {
           try {
-            val modelFiles = withContext(Dispatchers.IO) { getModelFiles() }
-            withContext(Dispatchers.IO) {
-              processorMutex.withLock {
-                if (ocrProcessor == null) {
-                  ocrProcessor = OcrProcessor(context, modelFiles)
+            val components = call.argument<List<String>>("components")
+              ?.toSet()
+              ?: setOf("detector", "recognizer")
+            val prepareRecognizer = components.contains("recognizer")
+            val status = withContext(Dispatchers.IO) {
+              if (prepareRecognizer) {
+                val modelFiles = getModelFiles()
+                processorMutex.withLock {
+                  if (ocrProcessor == null) {
+                    ocrProcessor = OcrProcessor(context, modelFiles)
+                  }
                 }
+                Triple(true, modelFiles.version, modelFiles.baseDir.absolutePath)
+              } else {
+                val detectorFiles = modelManager.ensureDetectionModel()
+                Triple(true, detectorFiles.version, detectorFiles.baseDir.absolutePath)
               }
             }
             result.success(
               mapOf(
-                "isReady" to true,
-                "version" to modelFiles.version,
-                "modelPath" to modelFiles.baseDir.absolutePath
+                "isReady" to status.first,
+                "version" to status.second,
+                "modelPath" to status.third
               )
             )
           } catch (e: Exception) {
             Log.e(TAG, "Model preparation failed", e)
             result.error("MODEL_PREP_ERROR", e.message ?: "Could not prepare models", null)
+          }
+        }
+      }
+      "getModelAvailability" -> {
+        mainScope.launch {
+          try {
+            val availability = withContext(Dispatchers.IO) {
+              modelManager.getAvailability()
+            }
+            result.success(
+              mapOf(
+                "detectorReady" to availability.detectorReady,
+                "recognizerReady" to availability.recognizerReady,
+                "version" to availability.version
+              )
+            )
+          } catch (e: Exception) {
+            Log.e(TAG, "Failed to inspect OCR model availability", e)
+            result.error("MODEL_STATUS_ERROR", e.message, null)
           }
         }
       }
@@ -119,7 +152,12 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
             result.success(regionResult)
           } catch (e: Exception) {
             Log.e(TAG, "Text region detection failed for $imagePath", e)
-            result.error("DETECTION_ERROR", e.message ?: "Could not detect text regions", null)
+            val errorCode = if (e is ModelNotReadyException) {
+              "MODEL_NOT_READY"
+            } else {
+              "DETECTION_ERROR"
+            }
+            result.error(errorCode, e.message ?: "Could not detect text regions", null)
           }
         }
       }
@@ -491,7 +529,8 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   private suspend fun getOrCreateRegionDetector(): TextRegionDetector {
     return regionDetectorMutex.withLock {
       textRegionDetector ?: TextRegionDetector(
-        modelManager.ensureDetectionModel()
+        modelManager.getDetectionModelIfAvailable()
+          ?: throw ModelNotReadyException()
       ).also { created ->
         textRegionDetector = created
       }

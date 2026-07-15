@@ -21,6 +21,12 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 "version": "iOS-Vision",
                 "modelPath": "system"
             ])
+        case "getModelAvailability":
+            result([
+                "detectorReady": true,
+                "recognizerReady": true,
+                "version": "iOS-Vision"
+            ])
         case "detectText":
             handleTextDetection(call: call, result: result)
         case "detectTextRegions":

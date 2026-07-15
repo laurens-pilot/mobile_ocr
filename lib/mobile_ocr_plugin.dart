@@ -4,7 +4,11 @@ import 'dart:ui';
 import 'package:mobile_ocr/models/text_block.dart';
 import 'package:mobile_ocr/models/text_region.dart';
 
+import 'models/ocr_model.dart';
+
 import 'mobile_ocr_plugin_platform_interface.dart';
+
+export 'models/ocr_model.dart';
 
 class MobileOcr {
   Future<String?> getPlatformVersion() {
@@ -16,9 +20,20 @@ class MobileOcr {
   /// Downloads any missing files, verifies checksums, and caches them on disk.
   /// Returns a [ModelPreparationStatus] describing the cache status. This call
   /// is a no-op on iOS because it relies on the Vision framework.
-  Future<ModelPreparationStatus> prepareModels() async {
-    final result = await MobileOcrPlatform.instance.prepareModels();
+  Future<ModelPreparationStatus> prepareModels({
+    Set<OcrModelComponent>? components,
+  }) async {
+    final requestedComponents = components ?? OcrModelComponent.values.toSet();
+    final result = await MobileOcrPlatform.instance.prepareModels(
+      components: requestedComponents,
+    );
     return ModelPreparationStatus.fromMap(result);
+  }
+
+  /// Read the native OCR model state without downloading anything.
+  Future<OcrModelAvailability> getModelAvailability() async {
+    final result = await MobileOcrPlatform.instance.getModelAvailability();
+    return OcrModelAvailability.fromMap(result);
   }
 
   /// Detect text in an image at the provided file system path.

@@ -50,8 +50,15 @@ class MockMobileOcrPlatform
   }
 
   @override
-  Future<Map<dynamic, dynamic>> prepareModels() async {
+  Future<Map<dynamic, dynamic>> prepareModels({
+    required Set<OcrModelComponent> components,
+  }) async {
     return {'isReady': true, 'version': 'test', 'modelPath': '/tmp'};
+  }
+
+  @override
+  Future<Map<dynamic, dynamic>> getModelAvailability() async {
+    return {'detectorReady': true, 'recognizerReady': false, 'version': 'test'};
   }
 }
 
@@ -149,6 +156,16 @@ void main() {
     expect(result.regions.single, isA<TextRegion>());
     expect(result.regions.single.boundingBox, const Rect.fromLTWH(1, 2, 4, 4));
     await tempDir.delete(recursive: true);
+  });
+
+  test('getModelAvailability parses readiness without preparation', () async {
+    MobileOcrPlatform.instance = MockMobileOcrPlatform();
+
+    final availability = await MobileOcr().getModelAvailability();
+
+    expect(availability.detectorReady, isTrue);
+    expect(availability.recognizerReady, isFalse);
+    expect(availability.version, 'test');
   });
 }
 

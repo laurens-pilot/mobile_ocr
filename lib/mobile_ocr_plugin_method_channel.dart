@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'mobile_ocr_plugin_platform_interface.dart';
+import 'models/ocr_model.dart';
 
 /// An implementation of [MobileOcrPlatform] that uses method channels.
 class MethodChannelMobileOcr extends MobileOcrPlatform {
@@ -50,9 +51,20 @@ class MethodChannelMobileOcr extends MobileOcrPlatform {
   }
 
   @override
-  Future<Map<dynamic, dynamic>> prepareModels() async {
+  Future<Map<dynamic, dynamic>> prepareModels({
+    required Set<OcrModelComponent> components,
+  }) async {
     final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>(
       'prepareModels',
+      {'components': components.map((component) => component.name).toList()},
+    );
+    return result ?? {};
+  }
+
+  @override
+  Future<Map<dynamic, dynamic>> getModelAvailability() async {
+    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>>(
+      'getModelAvailability',
     );
     return result ?? {};
   }

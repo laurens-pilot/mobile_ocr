@@ -1,5 +1,6 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
+import 'models/ocr_model.dart';
 import 'mobile_ocr_plugin_method_channel.dart';
 
 abstract class MobileOcrPlatform extends PlatformInterface {
@@ -42,7 +43,15 @@ abstract class MobileOcrPlatform extends PlatformInterface {
     throw UnimplementedError('hasText() has not been implemented.');
   }
 
-  Future<Map<dynamic, dynamic>> prepareModels() {
+  Future<Map<dynamic, dynamic>> prepareModels({
+    required Set<OcrModelComponent> components,
+  }) {
     throw UnimplementedError('prepareModels() has not been implemented.');
+  }
+
+  Future<Map<dynamic, dynamic>> getModelAvailability() {
+    throw UnimplementedError(
+      'getModelAvailability() has not been implemented.',
+    );
   }
 }
