@@ -30,6 +30,8 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     private const val FULL_OCR_MAX_PIXELS = 12_000_000L
     private const val REGION_MAX_DIMENSION = 1280
     private const val REGION_MAX_PIXELS = 2_000_000L
+    private const val DISPLAY_CACHE_MAX_ENTRIES = 32
+    private const val DISPLAY_CACHE_MAX_BYTES = 256L * 1024L * 1024L
   }
 
   private lateinit var channel : MethodChannel
@@ -43,7 +45,11 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   private val processorMutex = Mutex()
   private val regionDetectorMutex = Mutex()
   private val displayableCacheMutex = Mutex()
-  private val displayableImageCache = mutableMapOf<String, ImageCacheEntry>()
+  private val displayableImageCache = LinkedHashMap<String, ImageCacheEntry>(
+    16,
+    0.75f,
+    true
+  )
   private val activeTasks = AtomicInteger(0)
   private val requestJobs = ConcurrentHashMap<String, Job>()
   @Volatile private var shuttingDown = false
@@ -451,8 +457,11 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
             entry.sourceSize == size &&
             cachedFile.exists()
           ) {
+            cachedFile.setLastModified(System.currentTimeMillis())
             return@runBlocking entry.cachedPath
           }
+          displayableImageCache.remove(cacheKey)
+          cachedFile.delete()
         }
 
         val decoded = decodeImage(
@@ -489,8 +498,34 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
           sourceModified = lastModified,
           sourceSize = size
         )
+        trimDisplayCache(cacheDir)
 
         cacheFile.absolutePath
+      }
+    }
+  }
+
+  private fun trimDisplayCache(cacheDir: File) {
+    val files = cacheDir.listFiles()
+      ?.filter { it.isFile && it.name.startsWith("img_") && it.extension == "png" }
+      ?.sortedByDescending { it.lastModified() }
+      ?: return
+    var retainedBytes = 0L
+    files.forEachIndexed { index, file ->
+      val fileSize = file.length()
+      val retain = index < DISPLAY_CACHE_MAX_ENTRIES &&
+        retainedBytes + fileSize <= DISPLAY_CACHE_MAX_BYTES
+      if (retain) {
+        retainedBytes += fileSize
+      } else {
+        file.delete()
+      }
+    }
+
+    val iterator = displayableImageCache.entries.iterator()
+    while (iterator.hasNext()) {
+      if (!File(iterator.next().value.cachedPath).exists()) {
+        iterator.remove()
       }
     }
   }
