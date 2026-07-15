@@ -44,6 +44,7 @@ class MobileOcr {
   Future<TextDetectionResult> detectText({
     required String imagePath,
     bool includeAllConfidenceScores = false,
+    String? requestId,
   }) async {
     final file = File(imagePath);
     if (!file.existsSync()) {
@@ -53,6 +54,7 @@ class MobileOcr {
     final result = await MobileOcrPlatform.instance.detectText(
       imagePath: file.path,
       includeAllConfidenceScores: includeAllConfidenceScores,
+      requestId: requestId,
     );
     return TextDetectionResult.fromMap(result);
   }
@@ -60,6 +62,7 @@ class MobileOcr {
   /// Detect likely text regions without recognizing their contents.
   Future<TextRegionDetectionResult> detectTextRegions({
     required String imagePath,
+    String? requestId,
   }) async {
     final file = File(imagePath);
     if (!file.existsSync()) {
@@ -68,8 +71,14 @@ class MobileOcr {
 
     final result = await MobileOcrPlatform.instance.detectTextRegions(
       imagePath: file.path,
+      requestId: requestId,
     );
     return TextRegionDetectionResult.fromMap(result);
+  }
+
+  /// Cancel an OCR operation previously started with [requestId].
+  Future<void> cancelRequest(String requestId) {
+    return MobileOcrPlatform.instance.cancelRequest(requestId);
   }
 
   /// Quickly determine whether the image contains high-confidence text.

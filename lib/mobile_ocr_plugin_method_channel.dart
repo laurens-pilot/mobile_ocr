@@ -22,11 +22,13 @@ class MethodChannelMobileOcr extends MobileOcrPlatform {
   Future<Map<dynamic, dynamic>> detectText({
     required String imagePath,
     bool includeAllConfidenceScores = false,
+    String? requestId,
   }) async {
     final result = await methodChannel
         .invokeMapMethod<dynamic, dynamic>('detectText', {
           'imagePath': imagePath,
           'includeAllConfidenceScores': includeAllConfidenceScores,
+          'requestId': requestId,
         });
     return result ?? const {};
   }
@@ -34,12 +36,20 @@ class MethodChannelMobileOcr extends MobileOcrPlatform {
   @override
   Future<Map<dynamic, dynamic>> detectTextRegions({
     required String imagePath,
+    String? requestId,
   }) async {
     final result = await methodChannel.invokeMapMethod<dynamic, dynamic>(
       'detectTextRegions',
-      {'imagePath': imagePath},
+      {'imagePath': imagePath, 'requestId': requestId},
     );
     return result ?? const {};
+  }
+
+  @override
+  Future<void> cancelRequest(String requestId) {
+    return methodChannel.invokeMethod<void>('cancelRequest', {
+      'requestId': requestId,
+    });
   }
 
   @override

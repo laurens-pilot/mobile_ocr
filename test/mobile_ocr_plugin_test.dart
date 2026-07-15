@@ -19,6 +19,7 @@ class MockMobileOcrPlatform
   Future<Map<dynamic, dynamic>> detectText({
     required String imagePath,
     bool includeAllConfidenceScores = false,
+    String? requestId,
   }) async {
     return {'blocks': [], 'imageWidth': 0, 'imageHeight': 0};
   }
@@ -26,6 +27,7 @@ class MockMobileOcrPlatform
   @override
   Future<Map<dynamic, dynamic>> detectTextRegions({
     required String imagePath,
+    String? requestId,
   }) async {
     return {
       'regions': [
@@ -43,6 +45,9 @@ class MockMobileOcrPlatform
       'imageHeight': 200,
     };
   }
+
+  @override
+  Future<void> cancelRequest(String requestId) async {}
 
   @override
   Future<bool> hasText({required String imagePath}) async {

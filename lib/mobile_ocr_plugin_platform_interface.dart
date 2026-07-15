@@ -31,12 +31,20 @@ abstract class MobileOcrPlatform extends PlatformInterface {
   Future<Map<dynamic, dynamic>> detectText({
     required String imagePath,
     bool includeAllConfidenceScores = false,
+    String? requestId,
   }) {
     throw UnimplementedError('detectText() has not been implemented.');
   }
 
-  Future<Map<dynamic, dynamic>> detectTextRegions({required String imagePath}) {
+  Future<Map<dynamic, dynamic>> detectTextRegions({
+    required String imagePath,
+    String? requestId,
+  }) {
     throw UnimplementedError('detectTextRegions() has not been implemented.');
+  }
+
+  Future<void> cancelRequest(String requestId) {
+    throw UnimplementedError('cancelRequest() has not been implemented.');
   }
 
   Future<bool> hasText({required String imagePath}) {

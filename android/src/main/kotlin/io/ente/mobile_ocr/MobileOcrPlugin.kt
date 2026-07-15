@@ -18,6 +18,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /** MobileOcrPlugin */
@@ -40,6 +41,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   private val displayableCacheMutex = Mutex()
   private val displayableImageCache = mutableMapOf<String, ImageCacheEntry>()
   private val activeTasks = AtomicInteger(0)
+  private val requestJobs = ConcurrentHashMap<String, Job>()
   @Volatile private var shuttingDown = false
 
   private data class ImageCacheEntry(
@@ -124,13 +126,16 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         }
 
         val includeAllConfidenceScores = call.argument<Boolean>("includeAllConfidenceScores") ?: false
+        val requestId = call.argument<String>("requestId")
 
-        mainScope.launch {
+        launchRequest(requestId) {
           try {
             val ocrResult = withContext(Dispatchers.IO) {
               processImage(imagePath, includeAllConfidenceScores)
             }
             result.success(ocrResult)
+          } catch (e: CancellationException) {
+            result.error("CANCELLED", "OCR request was cancelled", null)
           } catch (e: Exception) {
             Log.e(TAG, "OCR processing failed for $imagePath", e)
             result.error("OCR_ERROR", e.message ?: "Could not process image", null)
@@ -144,12 +149,15 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
           return
         }
 
-        mainScope.launch {
+        val requestId = call.argument<String>("requestId")
+        launchRequest(requestId) {
           try {
             val regionResult = withContext(Dispatchers.IO) {
               detectTextRegions(imagePath)
             }
             result.success(regionResult)
+          } catch (e: CancellationException) {
+            result.error("CANCELLED", "OCR request was cancelled", null)
           } catch (e: Exception) {
             Log.e(TAG, "Text region detection failed for $imagePath", e)
             val errorCode = if (e is ModelNotReadyException) {
@@ -160,6 +168,15 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
             result.error(errorCode, e.message ?: "Could not detect text regions", null)
           }
         }
+      }
+      "cancelRequest" -> {
+        val requestId = call.argument<String>("requestId")
+        if (requestId.isNullOrBlank()) {
+          result.error("INVALID_ARGUMENT", "Request ID is required", null)
+          return
+        }
+        requestJobs.remove(requestId)?.cancel()
+        result.success(null)
       }
       "hasText" -> {
         val imagePath = call.argument<String>("imagePath")
@@ -223,6 +240,25 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         result.notImplemented()
       }
     }
+  }
+
+  private fun launchRequest(
+    requestId: String?,
+    operation: suspend () -> Unit
+  ) {
+    val job = mainScope.launch(start = CoroutineStart.LAZY) {
+      try {
+        operation()
+      } finally {
+        if (requestId != null) {
+          requestJobs.remove(requestId, coroutineContext.job)
+        }
+      }
+    }
+    if (requestId != null) {
+      requestJobs.put(requestId, job)?.cancel()
+    }
+    job.start()
   }
 
   private suspend fun processImage(imagePath: String, includeAllConfidenceScores: Boolean = false): Map<String, Any> {
@@ -487,6 +523,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     channel.setMethodCallHandler(null)
     shuttingDown = true
     mainScope.cancel()
+    requestJobs.clear()
     runBlocking {
       withTimeoutOrNull(5_000) {
         while (activeTasks.get() > 0) {

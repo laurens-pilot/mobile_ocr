@@ -58,6 +58,8 @@ void main() {
               };
             case 'prepareModels':
               return {'isReady': true, 'version': 'test', 'modelPath': '/tmp'};
+            case 'cancelRequest':
+              return null;
             default:
               return null;
           }
@@ -109,5 +111,9 @@ void main() {
       components: {OcrModelComponent.detector},
     );
     expect(result['isReady'], isTrue);
+  });
+
+  test('cancelRequest forwards request identifier', () async {
+    await platform.cancelRequest('request-1');
   });
 }

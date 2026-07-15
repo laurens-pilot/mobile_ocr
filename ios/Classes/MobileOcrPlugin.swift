@@ -4,6 +4,9 @@ import UIKit
 import Vision
 
 public class MobileOcrPlugin: NSObject, FlutterPlugin {
+    private let requestLock = NSLock()
+    private var activeRequests: [String: VNRequest] = [:]
+
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "mobile_ocr", binaryMessenger: registrar.messenger())
         let instance = MobileOcrPlugin()
@@ -31,6 +34,8 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             handleTextDetection(call: call, result: result)
         case "detectTextRegions":
             handleTextRegionDetection(call: call, result: result)
+        case "cancelRequest":
+            handleCancelRequest(call: call, result: result)
         case "hasText":
             handleQuickTextCheck(call: call, result: result)
         case "ensureImageIsDisplayable":
@@ -57,11 +62,13 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
         }
 
         let includeAllConfidenceScores = (arguments["includeAllConfidenceScores"] as? Bool) ?? false
+        let requestId = arguments["requestId"] as? String
         // Lower confidence thresholds to be more inclusive
         let minConfidence: Float = includeAllConfidenceScores ? 0.0 : 0.3
 
         detectTextInImage(imagePath: imagePath,
                          minConfidence: minConfidence,
+                         requestId: requestId,
                          result: result)
     }
 
@@ -74,6 +81,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                                details: nil))
             return
         }
+        let requestId = arguments["requestId"] as? String
 
         DispatchQueue.global(qos: .userInitiated).async {
             guard let image = UIImage(contentsOfFile: imagePath) else {
@@ -135,6 +143,8 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 }
             }
             request.reportCharacterBoxes = false
+            self.register(request, requestId: requestId)
+            defer { self.finishRequest(request, requestId: requestId) }
 
             do {
                 try VNImageRequestHandler(cgImage: cgImage, options: [:])
@@ -144,7 +154,11 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             }
 
             DispatchQueue.main.async {
-                if let error = callbackError {
+                if request.isCancelled {
+                    result(FlutterError(code: "CANCELLED",
+                                       message: "OCR request was cancelled",
+                                       details: nil))
+                } else if let error = callbackError {
                     result(FlutterError(code: "DETECTION_ERROR",
                                        message: "Failed to detect text regions",
                                        details: error.localizedDescription))
@@ -178,6 +192,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
 
     private func detectTextInImage(imagePath: String,
                                   minConfidence: Float,
+                                  requestId: String?,
                                   result: @escaping FlutterResult) {
         // Move processing to background queue
         let workItem = DispatchWorkItem {
@@ -308,6 +323,8 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                     ])
                 }
             }
+            self.register(request, requestId: requestId)
+            defer { self.finishRequest(request, requestId: requestId) }
 
             // Configure request for best accuracy
             request.recognitionLevel = .accurate
@@ -387,11 +404,17 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
 
             // Return results on main thread
             DispatchQueue.main.async {
-                result([
-                    "blocks": detectedTexts,
-                    "imageWidth": cgImage.width,
-                    "imageHeight": cgImage.height
-                ] as [String: Any])
+                if request.isCancelled {
+                    result(FlutterError(code: "CANCELLED",
+                                       message: "OCR request was cancelled",
+                                       details: nil))
+                } else {
+                    result([
+                        "blocks": detectedTexts,
+                        "imageWidth": cgImage.width,
+                        "imageHeight": cgImage.height
+                    ] as [String: Any])
+                }
             }
         }
         DispatchQueue.global(qos: .userInitiated).async(execute: workItem)
@@ -565,6 +588,40 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 result(hasValidText)
             }
         })
+    }
+
+    private func handleCancelRequest(call: FlutterMethodCall,
+                                     result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let requestId = arguments["requestId"] as? String,
+              !requestId.isEmpty else {
+            result(FlutterError(code: "INVALID_ARGUMENTS",
+                               message: "Request ID is required",
+                               details: nil))
+            return
+        }
+        requestLock.lock()
+        let request = activeRequests.removeValue(forKey: requestId)
+        requestLock.unlock()
+        request?.cancel()
+        result(nil)
+    }
+
+    private func register(_ request: VNRequest, requestId: String?) {
+        guard let requestId = requestId else { return }
+        requestLock.lock()
+        let previous = activeRequests.updateValue(request, forKey: requestId)
+        requestLock.unlock()
+        previous?.cancel()
+    }
+
+    private func finishRequest(_ request: VNRequest, requestId: String?) {
+        guard let requestId = requestId else { return }
+        requestLock.lock()
+        if activeRequests[requestId] === request {
+            activeRequests.removeValue(forKey: requestId)
+        }
+        requestLock.unlock()
     }
 
     private static func logDebug(_ message: String) {
