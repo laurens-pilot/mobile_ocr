@@ -1,5 +1,7 @@
 {
   "meme_perfect_couple.jpeg": {
+    "requiredTexts": ["circulation", "space heater", "perfect couple"],
+    "minimumBlocks": 2,
     "texts": [
       "Has poor circulation",
       "Is basically a space heater",
@@ -8,6 +10,8 @@
     "description": "Stick figure meme about temperature compatibility"
   },
   "meme_ice_cream.jpeg": {
+    "requiredTexts": ["how she looks", "ice cream"],
+    "minimumBlocks": 2,
     "texts": [
       "HOW SHE LOOKS AT YOU WHEN YOU SAY",
       "YOU DON'T WANT TO GET ICE-CREAM"
@@ -15,6 +19,8 @@
     "description": "Meme with white animal looking at camera"
   },
   "meme_love_you.jpeg": {
+    "requiredTexts": ["nobody", "love you"],
+    "minimumBlocks": 2,
     "texts": [
       "Nobody:",
       "Me randomly when I love you",
@@ -23,6 +29,8 @@
     "description": "Pokemon meme with Snorlax"
   },
   "meme_waking_up.jpeg": {
+    "requiredTexts": ["waking up", "beautiful face"],
+    "minimumBlocks": 2,
     "texts": [
       "Him: \"I love waking up next to you and seeing your beautiful face\"",
       "Me waking up:"
@@ -30,6 +38,8 @@
     "description": "Meme with distorted face image"
   },
   "mail_screenshot.jpeg": {
+    "requiredTexts": ["Dennis", "Strawinksylaan", "Hi Laurens"],
+    "minimumBlocks": 5,
     "texts": [
       "08:17",
       "sollicitatie. Graag nodig ik",
@@ -54,6 +64,10 @@
     "description": "Gmail email conversation in Dutch"
   },
   "ocr_test.jpeg": {
+    "requiredTexts": ["Restaurant", "Burritos", "385"],
+    "iosRequiredTexts": ["HÓA ĐƠN"],
+    "androidRequiredTexts": ["HOA DON"],
+    "minimumBlocks": 5,
     "texts": [
       "Restaurant",
       "Thắng Tú, thị trấn Cát Bà",
@@ -105,6 +119,12 @@
     "description": "Vietnamese restaurant receipt"
   },
   "screen_photos.jpeg": {
+    "requiredTexts": [
+      "terugbetalen",
+      "bankrekeningnummer",
+      "Dienst Uitvoering"
+    ],
+    "minimumBlocks": 5,
     "texts": [
       "Kan ik alvast beginnen met terugbetalen?",
       "Antwoord",
@@ -117,6 +137,8 @@
     "description": "Dutch government website FAQ about student loan repayment"
   },
   "text_photos.jpeg": {
+    "requiredTexts": ["houd moed", "eindeloos liefgehad", "Ingmar Heytze"],
+    "minimumBlocks": 5,
     "texts": [
       "Ik ken u niet, u kent mij niet.",
       "We zijn de regels op een doek",
@@ -135,6 +157,8 @@
     "description": "Dutch poetry on outdoor sign/poster"
   },
   "receipt_swiggy.jpg": {
+    "requiredTexts": ["Salad Days", "Grand Total", "Delivery Passcode"],
+    "minimumBlocks": 5,
     "texts": [
       "PAID",
       "Salad Days Marathahalli",
@@ -184,6 +208,8 @@
     "description": "Swiggy food delivery receipt from Salad Days"
   },
   "payment_transactions.png": {
+    "requiredTexts": ["Ram Cook", "Sent Securely"],
+    "minimumBlocks": 5,
     "texts": [
       "11:27",
       "77",
@@ -208,5 +234,53 @@
       "Enter amount or chat"
     ],
     "description": "Payment app showing transaction history with Ram Cook"
+  },
+  "bob_ios_detection_issue.JPEG": {
+    "requiredTexts": ["Dear Customer", "Voucher Code", "Expiry Date"],
+    "minimumBlocks": 5,
+    "texts": [
+      "Dear Customer",
+      "Swiggy Money Voucher Gift Code",
+      "Voucher Code",
+      "Value: 2000.00",
+      "Expiry Date: 18 Apr 2026"
+    ],
+    "description": "WhatsApp screenshot that previously lost iOS detections"
+  },
+  "heic_test.HEIC": {
+    "requiredTexts": ["HDFC BANK", "SCAN & PAY", "UPI"],
+    "minimumBlocks": 3,
+    "texts": [
+      "Pine Labs",
+      "HDFC BANK",
+      "SCAN & PAY",
+      "UPI ID",
+      "INDWELL RETAIL PRIVATE LIM"
+    ],
+    "description": "Rotated HEIC photo of an HDFC UPI payment sign"
+  },
+  "ocr_working.jpg": {
+    "requiredTexts": ["SX100", "230V 50Hz", "440011500057945"],
+    "minimumBlocks": 3,
+    "texts": [
+      "SX100",
+      "L12B2",
+      "1000imp/kWh",
+      "0.25-5(40)A 230V 50Hz",
+      "440011500057945"
+    ],
+    "description": "Electric meter photo that was reported to detect text"
+  },
+  "ocr_not_working.jpg": {
+    "requiredTexts": ["gmail.com", "06 70 327 3227", "Bodajk"],
+    "minimumBlocks": 3,
+    "texts": [
+      "LiliVirág kertészet",
+      "06 70 327 3227",
+      "alkatreszfutar@gmail.com",
+      "8053 Bodajk, Dózsa Gy. u.",
+      "H-P: 8-12, 13-17, Szo.: 8-12"
+    ],
+    "description": "Business card photo that was reported to miss text"
   }
 }
