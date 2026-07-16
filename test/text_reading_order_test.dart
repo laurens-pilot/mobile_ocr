@@ -52,6 +52,18 @@ void main() {
     expect(order, [0, 1, 3, 2, 4, 5]);
   });
 
+  test('keeps column blocks that overlap a spanning heading', () {
+    final order = orderTextBlocksForReading([
+      block(0, 10, 0, width: 190, height: 40),
+      block(1, 10, 20),
+      block(2, 120, 22),
+      block(3, 10, 60),
+      block(4, 120, 62),
+    ]);
+
+    expect(order, [0, 1, 3, 2, 4]);
+  });
+
   test('reads predominantly RTL columns from right to left', () {
     final order = orderTextBlocksForReading([
       block(0, 10, 10, text: 'مرحبا'),

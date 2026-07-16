@@ -69,14 +69,15 @@ List<int> orderTextBlocksForReading(Iterable<TextReadingOrderBlock> source) {
   final result = <int>[];
   double bandTop = double.negativeInfinity;
   for (final separator in spanning) {
+    final boundary = separator.bounds.center.dy;
     _appendColumnBand(
       result,
       columns,
       bandTop: bandTop,
-      bandBottom: separator.bounds.top,
+      bandBottom: boundary,
     );
     result.add(separator.index);
-    bandTop = separator.bounds.bottom;
+    bandTop = boundary;
   }
   _appendColumnBand(
     result,
@@ -139,7 +140,8 @@ void _appendColumnBand(
 }) {
   for (final column in columns) {
     for (final block in column.blocks) {
-      if (block.bounds.top >= bandTop && block.bounds.top < bandBottom) {
+      final center = block.bounds.center.dy;
+      if (center >= bandTop && center < bandBottom) {
         result.add(block.index);
       }
     }
