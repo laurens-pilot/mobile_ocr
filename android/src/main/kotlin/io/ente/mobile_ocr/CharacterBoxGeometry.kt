@@ -36,7 +36,7 @@ object CharacterBoxGeometry {
         return spans.mapNotNull { span ->
             var start = span.startRatio
             var end = span.endRatio
-            if (rotated) {
+            if (rotated != isVertical) {
                 val reversedStart = 1f - end
                 val reversedEnd = 1f - start
                 start = reversedStart.coerceIn(0f, 1f)
