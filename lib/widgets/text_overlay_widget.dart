@@ -1690,32 +1690,28 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
   }
 
   TextRange? _wordBoundaryAt(_BlockVisual visual, int index) {
-    final String text = visual.block.text;
     final int charCount = visual.characterCount;
-    if (text.isEmpty || charCount == 0) {
+    if (charCount == 0) {
       return null;
     }
 
-    final int maxIndex = min(text.length - 1, charCount - 1);
-    if (maxIndex < 0) {
-      return null;
-    }
-
-    final int clampedIndex = _clampIndex(index, 0, maxIndex);
-    final _GlyphCategory category = _glyphCategory(text[clampedIndex]);
+    final int clampedIndex = _clampIndex(index, 0, charCount - 1);
+    final _GlyphCategory category = _glyphCategory(
+      visual.characters[clampedIndex].text,
+    );
     if (category == _GlyphCategory.whitespace) {
       return null;
     }
 
     int start = clampedIndex;
-    while (start > 0 && _glyphCategory(text[start - 1]) == category) {
+    while (start > 0 &&
+        _glyphCategory(visual.characters[start - 1].text) == category) {
       start -= 1;
     }
 
     int end = clampedIndex + 1;
-    while (end < text.length &&
-        end < charCount &&
-        _glyphCategory(text[end]) == category) {
+    while (end < charCount &&
+        _glyphCategory(visual.characters[end].text) == category) {
       end += 1;
     }
 
