@@ -1,9 +1,29 @@
 import 'dart:io';
-import 'dart:ui';
 
+import 'package:flutter/services.dart';
 import 'package:mobile_ocr/models/text_block.dart';
+import 'package:mobile_ocr/models/text_region.dart';
+
+import 'models/ocr_exception.dart';
+import 'models/ocr_model.dart';
 
 import 'mobile_ocr_plugin_platform_interface.dart';
+
+export 'models/ocr_model.dart';
+export 'models/ocr_exception.dart';
+export 'models/text_region.dart';
+
+Future<T> _translatePlatformException<T>(Future<T> Function() operation) async {
+  try {
+    return await operation();
+  } on PlatformException catch (error) {
+    throw OcrException(
+      code: error.code,
+      message: error.message ?? 'OCR operation failed',
+      details: error.details,
+    );
+  }
+}
 
 class MobileOcr {
   Future<String?> getPlatformVersion() {
@@ -15,9 +35,24 @@ class MobileOcr {
   /// Downloads any missing files, verifies checksums, and caches them on disk.
   /// Returns a [ModelPreparationStatus] describing the cache status. This call
   /// is a no-op on iOS because it relies on the Vision framework.
-  Future<ModelPreparationStatus> prepareModels() async {
-    final result = await MobileOcrPlatform.instance.prepareModels();
+  Future<ModelPreparationStatus> prepareModels({
+    Set<OcrModelComponent>? components,
+  }) async {
+    final requestedComponents = components ?? OcrModelComponent.values.toSet();
+    final result = await _translatePlatformException(
+      () => MobileOcrPlatform.instance.prepareModels(
+        components: requestedComponents,
+      ),
+    );
     return ModelPreparationStatus.fromMap(result);
+  }
+
+  /// Read the native OCR model state without downloading anything.
+  Future<OcrModelAvailability> getModelAvailability() async {
+    final result = await _translatePlatformException(
+      MobileOcrPlatform.instance.getModelAvailability,
+    );
+    return OcrModelAvailability.fromMap(result);
   }
 
   /// Detect text in an image at the provided file system path.
@@ -28,30 +63,64 @@ class MobileOcr {
   Future<TextDetectionResult> detectText({
     required String imagePath,
     bool includeAllConfidenceScores = false,
+    String? requestId,
   }) async {
     final file = File(imagePath);
     if (!file.existsSync()) {
       throw ArgumentError('Image file does not exist at path: $imagePath');
     }
 
-    final result = await MobileOcrPlatform.instance.detectText(
-      imagePath: file.path,
-      includeAllConfidenceScores: includeAllConfidenceScores,
+    final result = await _translatePlatformException(
+      () => MobileOcrPlatform.instance.detectText(
+        imagePath: file.path,
+        includeAllConfidenceScores: includeAllConfidenceScores,
+        requestId: requestId,
+      ),
     );
     return TextDetectionResult.fromMap(result);
   }
 
-  /// Quickly determine whether the image contains high-confidence text.
+  /// Detect likely text regions without recognizing their contents.
+  Future<TextRegionDetectionResult> detectTextRegions({
+    required String imagePath,
+    String? requestId,
+  }) async {
+    final file = File(imagePath);
+    if (!file.existsSync()) {
+      throw ArgumentError('Image file does not exist at path: $imagePath');
+    }
+
+    final result = await _translatePlatformException(
+      () => MobileOcrPlatform.instance.detectTextRegions(
+        imagePath: file.path,
+        requestId: requestId,
+      ),
+    );
+    return TextRegionDetectionResult.fromMap(result);
+  }
+
+  /// Cancel an OCR operation previously started with [requestId].
+  Future<void> cancelRequest(String requestId) {
+    return _translatePlatformException(
+      () => MobileOcrPlatform.instance.cancelRequest(requestId),
+    );
+  }
+
+  /// Compatibility check for whether recognition finds high-confidence text.
   ///
-  /// Returns `true` if at least one detected text block has confidence >= 0.9.
-  /// Only the detection stage runs, making this faster than full recognition.
+  /// Android runs detection and recognition on up to three candidate regions;
+  /// iOS runs a Vision recognition request. Use [detectTextRegions] when a
+  /// detector-only routing signal is sufficient.
+  @Deprecated('Use detectTextRegions() for a detector-only routing signal.')
   Future<bool> hasText({required String imagePath}) async {
     final file = File(imagePath);
     if (!file.existsSync()) {
       throw ArgumentError('Image file does not exist at path: $imagePath');
     }
 
-    return MobileOcrPlatform.instance.hasText(imagePath: file.path);
+    return _translatePlatformException(
+      () => MobileOcrPlatform.instance.hasText(imagePath: file.path),
+    );
   }
 }
 
@@ -64,7 +133,8 @@ class TextDetectionResult {
   TextDetectionResult({required this.blocks, required this.imageSize});
 
   factory TextDetectionResult.fromMap(Map<dynamic, dynamic> map) {
-    final blocksList = (map['blocks'] as List?)?.cast<Map<dynamic, dynamic>>() ?? const [];
+    final blocksList =
+        (map['blocks'] as List?)?.cast<Map<dynamic, dynamic>>() ?? const [];
     final blocks = blocksList.map(TextBlock.fromMap).toList(growable: false);
     final imageWidth = (map['imageWidth'] as num?)?.toDouble() ?? 0.0;
     final imageHeight = (map['imageHeight'] as num?)?.toDouble() ?? 0.0;

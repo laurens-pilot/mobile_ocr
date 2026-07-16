@@ -13,7 +13,8 @@ data class ClassificationOutput(
 
 class TextClassifier(
     private val session: OrtSession,
-    private val ortEnv: OrtEnvironment
+    private val ortEnv: OrtEnvironment,
+    private val cancellationSignal: OnnxCancellationSignal? = null
 ) {
     companion object {
         private const val IMG_HEIGHT = 48
@@ -27,6 +28,7 @@ class TextClassifier(
 
         // Process in batches
         for (i in images.indices step BATCH_SIZE) {
+            cancellationSignal?.ensureActive()
             val batchEnd = minOf(i + BATCH_SIZE, images.size)
             val batch = images.subList(i, batchEnd)
 
@@ -67,16 +69,13 @@ class TextClassifier(
 
         // Run inference
         val inputs = mapOf(session.inputNames.first() to inputTensor)
-        val outputs = session.run(inputs)
-        val output = outputs[0] as OnnxTensor
-
-        // Decode results
-        val results = decodeOutput(output, batchSize)
-
-        output.close()
-        inputTensor.close()
-
-        return results
+        return try {
+            runOnnx(session, inputs, cancellationSignal).use { outputs ->
+                decodeOutput(outputs[0] as OnnxTensor, batchSize)
+            }
+        } finally {
+            inputTensor.close()
+        }
     }
 
     private fun preprocessImage(

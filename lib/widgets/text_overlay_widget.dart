@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_ocr/models/text_block.dart';
+import 'package:mobile_ocr/src/text_reading_order.dart';
 
 // OCR character boxes tend to overhang slightly on the left edge, so keep the
 // added selection slack slightly right-biased to visually center the highlight.
@@ -348,6 +349,7 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
   @override
   Widget build(BuildContext context) {
     return Stack(
+      clipBehavior: Clip.none,
       fit: StackFit.expand,
       children: [
         _buildInteractiveImage(),
@@ -374,6 +376,7 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
           panEnabled: _isPanEnabled,
           scaleEnabled: true,
           child: Stack(
+            clipBehavior: Clip.none,
             children: [
               Center(
                 child: Image.file(
@@ -443,9 +446,11 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
         final Widget visualLayer = KeyedSubtree(
           key: _interactiveViewerKey,
           child: Stack(
+            clipBehavior: Clip.none,
             children: [
               IgnorePointer(
                 child: Stack(
+                  clipBehavior: Clip.none,
                   children: [
                     const SizedBox.expand(),
                     ..._buildEditableBlockOverlays(),
@@ -493,6 +498,7 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
         );
 
         return Stack(
+          clipBehavior: Clip.none,
           children: [
             visualLayer,
             gestureLayer,
@@ -693,7 +699,7 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
   }
 
   void _finishDragSelection({required bool cancelled}) {
-    if (!_isSelecting) {
+    if (!mounted || !_isSelecting) {
       return;
     }
 
@@ -1145,51 +1151,45 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
           ),
         ],
       ),
-      child: IntrinsicHeight(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextButton(
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.horizontal(
-                    left: Radius.circular(8),
-                  ),
-                ),
-              ),
-              onPressed: _copySelectedText,
-              child: Text(
-                localizations.copyButtonLabel,
-                style: buttonTextStyle,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextButton(
+            style: TextButton.styleFrom(
+              alignment: Alignment.center,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(64, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.horizontal(left: Radius.circular(8)),
               ),
             ),
-            Container(width: 1, color: Colors.white.withValues(alpha: 0.2)),
-            TextButton(
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
+            onPressed: _copySelectedText,
+            child: Text(localizations.copyButtonLabel, style: buttonTextStyle),
+          ),
+          Container(width: 1, color: Colors.white.withValues(alpha: 0.2)),
+          TextButton(
+            style: TextButton.styleFrom(
+              alignment: Alignment.center,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(64, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.horizontal(
+                  right: Radius.circular(8),
                 ),
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.horizontal(
-                    right: Radius.circular(8),
-                  ),
-                ),
-              ),
-              onPressed: _selectAllText,
-              child: Text(
-                localizations.selectAllButtonLabel,
-                style: buttonTextStyle,
               ),
             ),
-          ],
-        ),
+            onPressed: _selectAllText,
+            child: Text(
+              localizations.selectAllButtonLabel,
+              style: buttonTextStyle,
+            ),
+          ),
+        ],
       ),
     );
 
@@ -1690,32 +1690,28 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
   }
 
   TextRange? _wordBoundaryAt(_BlockVisual visual, int index) {
-    final String text = visual.block.text;
     final int charCount = visual.characterCount;
-    if (text.isEmpty || charCount == 0) {
+    if (charCount == 0) {
       return null;
     }
 
-    final int maxIndex = min(text.length - 1, charCount - 1);
-    if (maxIndex < 0) {
-      return null;
-    }
-
-    final int clampedIndex = _clampIndex(index, 0, maxIndex);
-    final _GlyphCategory category = _glyphCategory(text[clampedIndex]);
+    final int clampedIndex = _clampIndex(index, 0, charCount - 1);
+    final _GlyphCategory category = _glyphCategory(
+      visual.characters[clampedIndex].text,
+    );
     if (category == _GlyphCategory.whitespace) {
       return null;
     }
 
     int start = clampedIndex;
-    while (start > 0 && _glyphCategory(text[start - 1]) == category) {
+    while (start > 0 &&
+        _glyphCategory(visual.characters[start - 1].text) == category) {
       start -= 1;
     }
 
     int end = clampedIndex + 1;
-    while (end < text.length &&
-        end < charCount &&
-        _glyphCategory(text[end]) == category) {
+    while (end < charCount &&
+        _glyphCategory(visual.characters[end].text) == category) {
       end += 1;
     }
 
@@ -1930,7 +1926,19 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
       _blockOrder.add(index);
     }
 
-    _blockOrder.sort(_compareBlockIndices);
+    _blockOrder
+      ..clear()
+      ..addAll(
+        orderTextBlocksForReading(
+          _blockVisuals.values.map(
+            (visual) => TextReadingOrderBlock(
+              index: visual.index,
+              bounds: visual.bounds,
+              text: visual.block.text,
+            ),
+          ),
+        ),
+      );
     _recomputeSelections();
   }
 
@@ -2141,30 +2149,6 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
       start.dx + (end.dx - start.dx) * clamped,
       start.dy + (end.dy - start.dy) * clamped,
     );
-  }
-
-  int _compareBlockIndices(int a, int b) {
-    final visualA = _blockVisuals[a];
-    final visualB = _blockVisuals[b];
-    if (visualA == null || visualB == null) {
-      return a.compareTo(b);
-    }
-
-    final rectA = visualA.bounds;
-    final rectB = visualB.bounds;
-
-    final double verticalDiff = rectA.top - rectB.top;
-    final double verticalThreshold = max(rectA.height, rectB.height) * 0.25;
-    if (verticalDiff.abs() > verticalThreshold) {
-      return verticalDiff < 0 ? -1 : 1;
-    }
-
-    final double horizontalDiff = rectA.left - rectB.left;
-    if (horizontalDiff.abs() > 2) {
-      return horizontalDiff < 0 ? -1 : 1;
-    }
-
-    return a.compareTo(b);
   }
 
   void _clampAnchorsToVisuals() {

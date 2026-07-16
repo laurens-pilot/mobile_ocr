@@ -26,6 +26,18 @@ data class ModelFiles(
     val dictionaryFile: File
 )
 
+data class DetectionModelFiles(
+    val version: String,
+    val baseDir: File,
+    val detectionModel: File
+)
+
+data class ModelAvailability(
+    val version: String,
+    val detectorReady: Boolean,
+    val recognizerReady: Boolean
+)
+
 class ModelManager(private val context: Context) {
 
     companion object {
@@ -79,6 +91,64 @@ class ModelManager(private val context: Context) {
                 recognitionModel = resolvedFiles.getValue(REQUIRED_ASSETS[1]),
                 classificationModel = resolvedFiles.getValue(REQUIRED_ASSETS[2]),
                 dictionaryFile = resolvedFiles.getValue(REQUIRED_ASSETS[3])
+            )
+        }
+    }
+
+    suspend fun ensureDetectionModel(): DetectionModelFiles {
+        return modelMutex.withLock {
+            prepareDirectory()
+            val asset = REQUIRED_ASSETS.first()
+            val target = File(cacheDirectory, asset.fileName)
+            val valid =
+                !shouldRefreshAssets() && target.exists() &&
+                    target.length() == asset.sizeBytes &&
+                    verifySha256(target, asset.sha256)
+            val resolvedFile = if (valid) target else downloadAsset(asset, target)
+            writeVersionMarker()
+            DetectionModelFiles(
+                version = MODEL_VERSION,
+                baseDir = cacheDirectory,
+                detectionModel = resolvedFile
+            )
+        }
+    }
+
+    suspend fun getAvailability(): ModelAvailability {
+        return modelMutex.withLock {
+            val versionMatches = !shouldRefreshAssets()
+            val availability = REQUIRED_ASSETS.associateWith { asset ->
+                val target = File(cacheDirectory, asset.fileName)
+                versionMatches && target.exists() &&
+                    target.length() == asset.sizeBytes &&
+                    verifySha256(target, asset.sha256)
+            }
+            ModelAvailability(
+                version = MODEL_VERSION,
+                detectorReady = availability.getValue(REQUIRED_ASSETS[0]),
+                recognizerReady = REQUIRED_ASSETS.drop(1).all {
+                    availability.getValue(it)
+                }
+            )
+        }
+    }
+
+    suspend fun getDetectionModelIfAvailable(): DetectionModelFiles? {
+        return modelMutex.withLock {
+            if (shouldRefreshAssets()) {
+                return@withLock null
+            }
+            val asset = REQUIRED_ASSETS.first()
+            val target = File(cacheDirectory, asset.fileName)
+            if (!target.exists() || target.length() != asset.sizeBytes ||
+                !verifySha256(target, asset.sha256)
+            ) {
+                return@withLock null
+            }
+            DetectionModelFiles(
+                version = MODEL_VERSION,
+                baseDir = cacheDirectory,
+                detectionModel = target
             )
         }
     }

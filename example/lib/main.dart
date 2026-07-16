@@ -56,8 +56,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
   Directory? _assetCacheDirectory;
   String? _imagePath;
   bool _isPickingImage = false;
-  bool _isCheckingHasText = false;
-  bool? _lastHasTextResult;
+  bool _isCheckingRegions = false;
+  int? _lastRegionCount;
   int? _currentTestImageIndex;
   bool _isLoadingTestImage = false;
 
@@ -77,7 +77,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
             AnimatedBuilder(
               animation: _textDetectorController,
               builder: (context, _) {
-                final isReady = _textDetectorController.hasSelectableText &&
+                final isReady =
+                    _textDetectorController.hasSelectableText &&
                     !_textDetectorController.isProcessing;
                 return IconButton(
                   tooltip: isReady
@@ -97,8 +98,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
               onPressed: () {
                 setState(() {
                   _imagePath = null;
-                  _lastHasTextResult = null;
-                  _isCheckingHasText = false;
+                  _lastRegionCount = null;
+                  _isCheckingRegions = false;
                 });
               },
             ),
@@ -107,13 +108,13 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
       body: Column(
         children: [
           Expanded(child: _buildImageStage(context)),
-          if (_lastHasTextResult != null)
+          if (_lastRegionCount != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  'hasText result: ${_lastHasTextResult!}',
+                  'Detected regions: $_lastRegionCount',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
@@ -173,10 +174,7 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
           children: [
             if (showBaseImage)
               Positioned.fill(
-                child: Image.file(
-                  File(path),
-                  fit: BoxFit.contain,
-                ),
+                child: Image.file(File(path), fit: BoxFit.contain),
               ),
             TextDetectorWidget(
               key: ValueKey(path),
@@ -213,11 +211,11 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
                 if (hasImage)
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: _isCheckingHasText ? null : _checkHasText,
+                      onPressed: _isCheckingRegions ? null : _checkTextRegions,
                       icon: const Icon(Icons.text_fields_outlined),
-                      label: _isCheckingHasText
+                      label: _isCheckingRegions
                           ? const Text('Checking...')
-                          : const Text('hasText'),
+                          : const Text('Regions'),
                     ),
                   ),
                 if (hasImage) const SizedBox(width: 12),
@@ -288,33 +286,33 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
     );
   }
 
-  Future<void> _checkHasText() async {
+  Future<void> _checkTextRegions() async {
     final path = _imagePath;
     if (path == null) {
       return;
     }
 
     setState(() {
-      _isCheckingHasText = true;
-      _lastHasTextResult = null;
+      _isCheckingRegions = true;
+      _lastRegionCount = null;
     });
 
     try {
-      debugPrint('Checking hasText for $path');
-      final result = await _mobileOcr.hasText(imagePath: path);
+      debugPrint('Detecting text regions for $path');
+      final result = await _mobileOcr.detectTextRegions(imagePath: path);
       if (!mounted) return;
       setState(() {
-        _lastHasTextResult = result;
+        _lastRegionCount = result.regions.length;
       });
-      _showSnackBar(context, 'hasText result: $result');
+      _showSnackBar(context, 'Detected ${result.regions.length} text regions');
     } catch (error) {
       if (!mounted) return;
-      debugPrint('hasText failed for $path: $error');
-      _showSnackBar(context, 'hasText failed: $error');
+      debugPrint('Text region detection failed for $path: $error');
+      _showSnackBar(context, 'Text region detection failed: $error');
     } finally {
       if (mounted) {
         setState(() {
-          _isCheckingHasText = false;
+          _isCheckingRegions = false;
         });
       }
     }
@@ -334,8 +332,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
       if (!mounted) return;
       setState(() {
         _imagePath = file.path;
-        _lastHasTextResult = null;
-        _isCheckingHasText = false;
+        _lastRegionCount = null;
+        _isCheckingRegions = false;
       });
     } catch (error) {
       if (!mounted) return;
@@ -368,8 +366,8 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
       setState(() {
         _currentTestImageIndex = nextIndex;
         _imagePath = filePath;
-        _lastHasTextResult = null;
-        _isCheckingHasText = false;
+        _lastRegionCount = null;
+        _isCheckingRegions = false;
       });
     } catch (error) {
       if (!mounted) return;
@@ -406,8 +404,9 @@ class _OcrDemoPageState extends State<OcrDemoPage> {
     if (existing != null) {
       return existing;
     }
-    final directory =
-        await Directory.systemTemp.createTemp('mobile_ocr_example_assets_');
+    final directory = await Directory.systemTemp.createTemp(
+      'mobile_ocr_example_assets_',
+    );
     _assetCacheDirectory = directory;
     return directory;
   }

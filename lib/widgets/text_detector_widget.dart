@@ -149,6 +149,9 @@ class TextDetectorWidget extends StatefulWidget {
   /// Defaults to true for backward compatibility.
   final bool showEditorHint;
 
+  /// Whether automatic detection should show the no-text message.
+  final bool showNoTextMessageOnAutoDetect;
+
   /// When set, the widget starts with the interaction animation active and
   /// will auto-select text at this position after detection completes.
   /// Used when the parent captured a long press before the widget was built.
@@ -191,6 +194,7 @@ class TextDetectorWidget extends StatefulWidget {
     this.overlayOnly = false,
     this.showProcessingOverlay = true,
     this.showEditorHint = true,
+    this.showNoTextMessageOnAutoDetect = true,
     this.initialInteractionPosition,
     this.showScanAnimation = true,
     this.isImageZoomed = false,
@@ -221,6 +225,8 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
   Size? _imageSize;
   bool _userAttemptedInteraction = false;
   Offset? _pendingSelectionPosition;
+  int _detectionRequestSequence = 0;
+  String? _activeDetectionRequestId;
   bool get _hasSelectableText =>
       _detectedTextBlocks != null && _detectedTextBlocks!.isNotEmpty;
 
@@ -246,6 +252,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
 
   @override
   void dispose() {
+    _cancelActiveDetection();
     _editorHintTimer?.cancel();
     widget.controller?._detach(this);
     super.dispose();
@@ -317,6 +324,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
       widget.controller?._attach(this);
     }
     if (oldWidget.imagePath != widget.imagePath) {
+      _cancelActiveDetection();
       setState(() {
         _isProcessing = widget.autoDetect;
         _detectedTextBlocks = null;
@@ -328,6 +336,14 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
       });
       _notifyController();
       unawaited(_initializeFile());
+    }
+  }
+
+  void _cancelActiveDetection() {
+    final requestId = _activeDetectionRequestId;
+    _activeDetectionRequestId = null;
+    if (requestId != null) {
+      unawaited(_ocr.cancelRequest(requestId).catchError((_) {}));
     }
   }
 
@@ -395,14 +411,25 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
       _notifyController();
     }
 
+    String? nativeRequestId;
     try {
       await _ensureModelsReady();
       if (_errorMessage != null) {
         throw Exception(_errorMessage);
       }
 
-      final result = await _ocr.detectText(imagePath: imagePath);
+      if (!mounted || widget.imagePath != requestedPath) {
+        return;
+      }
 
+      final requestId =
+          'text-detector-${identityHashCode(this)}-${++_detectionRequestSequence}';
+      nativeRequestId = requestId;
+      _activeDetectionRequestId = requestId;
+      final result = await _ocr.detectText(
+        imagePath: imagePath,
+        requestId: requestId,
+      );
       if (mounted && widget.imagePath == requestedPath) {
         final pendingPos = _pendingSelectionPosition;
         setState(() {
@@ -439,14 +466,28 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
         _notifyController();
       }
     } finally {
+      if (_activeDetectionRequestId == nativeRequestId) {
+        _activeDetectionRequestId = null;
+      }
       if (mounted && widget.imagePath == requestedPath) {
         setState(() {
           _isProcessing = false;
-          _userAttemptedInteraction = false;
           _pendingSelectionPosition = null;
         });
         _notifyController();
       }
+    }
+  }
+
+  void _handleLongPressStart(LongPressStartDetails details) {
+    setState(() {
+      _userAttemptedInteraction = true;
+      _pendingSelectionPosition = details.globalPosition;
+    });
+    _notifyController();
+
+    if (!_isProcessing) {
+      unawaited(_detectText());
     }
   }
 
@@ -459,21 +500,7 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
 
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
-      onLongPressStart: _detectedTextBlocks == null
-          ? (details) {
-              if (!_userAttemptedInteraction) {
-                setState(() {
-                  _userAttemptedInteraction = true;
-                  _pendingSelectionPosition = details.globalPosition;
-                });
-                _notifyController();
-              }
-              // Start detection on long press if not already running
-              if (!_isProcessing && _resolvedImagePath != null) {
-                _detectText();
-              }
-            }
-          : null,
+      onLongPressStart: _hasSelectableText ? null : _handleLongPressStart,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -499,7 +526,9 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
                   ? _buildNetworkErrorBanner(_errorMessage!)
                   : _buildErrorBanner(_errorMessage!),
             ),
-          if (_detectedTextBlocks != null &&
+          if ((widget.showNoTextMessageOnAutoDetect ||
+                  _userAttemptedInteraction) &&
+              _detectedTextBlocks != null &&
               _detectedTextBlocks!.isEmpty &&
               _errorMessage == null)
             Positioned(
@@ -735,8 +764,9 @@ class _TextDetectorWidgetState extends State<TextDetectorWidget> {
                 _errorMessage = null;
                 _isNetworkError = false;
                 _modelsReady = false;
+                _userAttemptedInteraction = true;
               });
-              _detectText();
+              unawaited(_detectText());
             },
             icon: const Icon(Icons.refresh, size: 18),
             label: Text(widget.strings.retryButtonLabel),

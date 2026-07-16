@@ -4,6 +4,19 @@ import UIKit
 import Vision
 
 public class MobileOcrPlugin: NSObject, FlutterPlugin {
+    private final class RequestState {
+        let id: String
+        var request: VNRequest?
+        var isCancelled = false
+
+        init(id: String) {
+            self.id = id
+        }
+    }
+
+    private let requestLock = NSLock()
+    private var activeRequests: [String: RequestState] = [:]
+
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "mobile_ocr", binaryMessenger: registrar.messenger())
         let instance = MobileOcrPlugin()
@@ -21,14 +34,24 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 "version": "iOS-Vision",
                 "modelPath": "system"
             ])
+        case "getModelAvailability":
+            result([
+                "detectorReady": true,
+                "recognizerReady": true,
+                "version": "iOS-Vision"
+            ])
         case "detectText":
             handleTextDetection(call: call, result: result)
+        case "detectTextRegions":
+            handleTextRegionDetection(call: call, result: result)
+        case "cancelRequest":
+            handleCancelRequest(call: call, result: result)
         case "hasText":
             handleQuickTextCheck(call: call, result: result)
         case "ensureImageIsDisplayable":
             guard let arguments = call.arguments as? [String: Any],
                   let imagePath = arguments["imagePath"] as? String else {
-                result(FlutterError(code: "INVALID_ARGUMENTS",
+                result(FlutterError(code: "INVALID_ARGUMENT",
                                     message: "Image path is required",
                                     details: nil))
                 return
@@ -42,26 +65,161 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
     private func handleTextDetection(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let arguments = call.arguments as? [String: Any],
               let imagePath = arguments["imagePath"] as? String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
+            result(FlutterError(code: "INVALID_ARGUMENT",
                                message: "Image path is required",
                                details: nil))
             return
         }
 
         let includeAllConfidenceScores = (arguments["includeAllConfidenceScores"] as? Bool) ?? false
+        let requestId = arguments["requestId"] as? String
+        let requestState = beginRequest(requestId: requestId)
         // Lower confidence thresholds to be more inclusive
         let minConfidence: Float = includeAllConfidenceScores ? 0.0 : 0.3
 
         detectTextInImage(imagePath: imagePath,
                          minConfidence: minConfidence,
+                         requestState: requestState,
                          result: result)
+    }
+
+    private func handleTextRegionDetection(call: FlutterMethodCall,
+                                           result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let imagePath = arguments["imagePath"] as? String else {
+            result(FlutterError(code: "INVALID_ARGUMENT",
+                               message: "Image path is required",
+                               details: nil))
+            return
+        }
+        let requestId = arguments["requestId"] as? String
+        let requestState = beginRequest(requestId: requestId)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            if self.stopIfCancelled(requestState, result: result) {
+                return
+            }
+            guard FileManager.default.fileExists(atPath: imagePath) else {
+                self.complete(
+                    requestState,
+                    result: result,
+                    error: FlutterError(code: "IMAGE_NOT_FOUND",
+                                        message: "Image file does not exist",
+                                        details: nil)
+                )
+                return
+            }
+            guard let image = UIImage(contentsOfFile: imagePath) else {
+                self.complete(
+                    requestState,
+                    result: result,
+                    error: FlutterError(code: "IMAGE_DECODE_ERROR",
+                                        message: "Failed to load image from path",
+                                        details: nil)
+                )
+                return
+            }
+            if self.stopIfCancelled(requestState, result: result) {
+                return
+            }
+
+            var fixedImage = image
+            if image.imageOrientation != .up {
+                let format = UIGraphicsImageRendererFormat.default()
+                format.scale = image.scale
+                format.opaque = false
+                fixedImage = UIGraphicsImageRenderer(
+                    size: image.size,
+                    format: format
+                ).image { _ in
+                    image.draw(in: CGRect(origin: .zero, size: image.size))
+                }
+            }
+
+            guard let cgImage = fixedImage.cgImage else {
+                self.complete(
+                    requestState,
+                    result: result,
+                    error: FlutterError(code: "IMAGE_DECODE_ERROR",
+                                        message: "Failed to get CGImage",
+                                        details: nil)
+                )
+                return
+            }
+            let detectionImage = self.downscaledCGImage(
+                fixedImage,
+                maxDimension: 1024
+            ) ?? cgImage
+            if self.stopIfCancelled(requestState, result: result) {
+                return
+            }
+
+            var regions: [[String: Any]] = []
+            var callbackError: Error?
+            let request = VNDetectTextRectanglesRequest { request, error in
+                if let error = error {
+                    callbackError = error
+                    return
+                }
+                let width = CGFloat(cgImage.width)
+                let height = CGFloat(cgImage.height)
+                let observations = request.results as? [VNTextObservation] ?? []
+                regions = observations.map { observation in
+                    let points: [[String: Double]] = [
+                        ["x": Double(observation.topLeft.x * width),
+                         "y": Double((1 - observation.topLeft.y) * height)],
+                        ["x": Double(observation.topRight.x * width),
+                         "y": Double((1 - observation.topRight.y) * height)],
+                        ["x": Double(observation.bottomRight.x * width),
+                         "y": Double((1 - observation.bottomRight.y) * height)],
+                        ["x": Double(observation.bottomLeft.x * width),
+                         "y": Double((1 - observation.bottomLeft.y) * height)]
+                    ]
+                    return [
+                        "confidence": Double(observation.confidence),
+                        "points": points
+                    ]
+                }
+            }
+            request.reportCharacterBoxes = false
+            guard self.register(request, requestState: requestState) else {
+                self.complete(requestState, result: result)
+                return
+            }
+
+            do {
+                try VNImageRequestHandler(cgImage: detectionImage, options: [:])
+                    .perform([request])
+            } catch {
+                callbackError = error
+            }
+            if let error = callbackError {
+                self.complete(
+                    requestState,
+                    result: result,
+                    error: FlutterError(code: "DETECTION_ERROR",
+                                        message: "Failed to detect text regions",
+                                        details: error.localizedDescription)
+                )
+            } else {
+                self.complete(
+                    requestState,
+                    result: result,
+                    value: [
+                        "regions": regions,
+                        "imageWidth": cgImage.width,
+                        "imageHeight": cgImage.height
+                    ]
+                )
+            }
+        }
     }
 
     private func handleQuickTextCheck(call: FlutterMethodCall,
                                       result: @escaping FlutterResult) {
         guard let arguments = call.arguments as? [String: Any],
               let imagePath = arguments["imagePath"] as? String else {
-            result(FlutterError(code: "INVALID_ARGUMENTS",
+            result(FlutterError(code: "INVALID_ARGUMENT",
                                message: "Image path is required",
                                details: nil))
             return
@@ -76,17 +234,36 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
 
     private func detectTextInImage(imagePath: String,
                                   minConfidence: Float,
+                                  requestState: RequestState?,
                                   result: @escaping FlutterResult) {
         // Move processing to background queue
         let workItem = DispatchWorkItem {
             let fileName = URL(fileURLWithPath: imagePath).lastPathComponent
+            if self.stopIfCancelled(requestState, result: result) {
+                return
+            }
+            guard FileManager.default.fileExists(atPath: imagePath) else {
+                self.complete(
+                    requestState,
+                    result: result,
+                    error: FlutterError(code: "IMAGE_NOT_FOUND",
+                                        message: "Image file does not exist",
+                                        details: nil)
+                )
+                return
+            }
             guard let image = UIImage(contentsOfFile: imagePath) else {
                 MobileOcrPlugin.logDebug("detectText load failure for \(fileName)")
-                DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
-                                       message: "Failed to load image from path",
-                                       details: nil))
-                }
+                self.complete(
+                    requestState,
+                    result: result,
+                    error: FlutterError(code: "IMAGE_DECODE_ERROR",
+                                        message: "Failed to load image from path",
+                                        details: nil)
+                )
+                return
+            }
+            if self.stopIfCancelled(requestState, result: result) {
                 return
             }
 
@@ -106,11 +283,16 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
 
             guard let cgImage = fixedImage.cgImage else {
                 MobileOcrPlugin.logDebug("detectText CGImage missing for \(fileName)")
-                DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
-                                       message: "Failed to get CGImage",
-                                       details: nil))
-                }
+                self.complete(
+                    requestState,
+                    result: result,
+                    error: FlutterError(code: "IMAGE_DECODE_ERROR",
+                                        message: "Failed to get CGImage",
+                                        details: nil)
+                )
+                return
+            }
+            if self.stopIfCancelled(requestState, result: result) {
                 return
             }
 
@@ -131,10 +313,11 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             var observationCount = 0
             var discardedLowConfidence = 0
             var previewSamples: [String] = []
+            var callbackError: Error?
 
             let request = VNRecognizeTextRequest { (request, error) in
                 if let error = error {
-                    print("Text recognition error: \(error.localizedDescription)")
+                    callbackError = error
                     return
                 }
 
@@ -193,10 +376,11 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                         ["x": Double(bottomLeft.x), "y": Double(bottomLeft.y)]
                     ]
 
-                    // Character-level bounding boxes (iOS 16+ only)
-                    let characterEntries: [[String: Any]] = []
-                    // TODO: Re-enable when minimum iOS version is 16+
-                    // Character boxes require iOS 16+ API that's not available in current build
+                    let characterEntries = self.characterEntries(
+                        for: topCandidate,
+                        imageWidth: imageWidth,
+                        imageHeight: imageHeight
+                    )
 
                     detectedTexts.append([
                         "text": topCandidate.string,
@@ -206,7 +390,6 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                     ])
                 }
             }
-
             // Configure request for best accuracy
             request.recognitionLevel = .accurate
             request.minimumTextHeight = 0.01
@@ -221,24 +404,34 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 request.revision = VNRecognizeTextRequestRevision3
                 configuredRevision = request.revision
             } else {
-                // Default to English for older iOS versions
-                request.recognitionLanguages = ["en-US"]
+                request.recognitionLanguages = self.preferredRecognitionLanguages(
+                    for: request
+                )
             }
             MobileOcrPlugin.logDebug(
                 "detectText request configured file=\(fileName)"
                 + " revision=\(configuredRevision)"
                 + " autoLanguage=\(autoLanguageEnabled)"
             )
+            guard self.register(request, requestState: requestState) else {
+                self.complete(requestState, result: result)
+                return
+            }
 
             // Perform the request
             do {
                 try requestHandler.perform([request])
             } catch {
-                DispatchQueue.main.async {
-                    result(FlutterError(code: "RECOGNITION_ERROR",
-                                       message: "Failed to perform text recognition",
-                                       details: error.localizedDescription))
-                }
+                callbackError = error
+            }
+            if let callbackError = callbackError {
+                self.complete(
+                    requestState,
+                    result: result,
+                    error: FlutterError(code: "RECOGNITION_ERROR",
+                                        message: "Text recognition failed",
+                                        details: callbackError.localizedDescription)
+                )
                 return
             }
             MobileOcrPlugin.logDebug(
@@ -283,16 +476,47 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 return firstRect.minX < secondRect.minX
             }
 
-            // Return results on main thread
-            DispatchQueue.main.async {
-                result([
+            self.complete(
+                requestState,
+                result: result,
+                value: [
                     "blocks": detectedTexts,
                     "imageWidth": cgImage.width,
                     "imageHeight": cgImage.height
-                ] as [String: Any])
-            }
+                ] as [String: Any]
+            )
         }
         DispatchQueue.global(qos: .userInitiated).async(execute: workItem)
+    }
+
+    private func characterEntries(for candidate: VNRecognizedText,
+                                  imageWidth: CGFloat,
+                                  imageHeight: CGFloat) -> [[String: Any]] {
+        var entries: [[String: Any]] = []
+        var start = candidate.string.startIndex
+        while start < candidate.string.endIndex {
+            let end = candidate.string.index(after: start)
+            let range = start..<end
+            if let observation = try? candidate.boundingBox(for: range) {
+                let points: [[String: Double]] = [
+                    ["x": Double(observation.topLeft.x * imageWidth),
+                     "y": Double((1 - observation.topLeft.y) * imageHeight)],
+                    ["x": Double(observation.topRight.x * imageWidth),
+                     "y": Double((1 - observation.topRight.y) * imageHeight)],
+                    ["x": Double(observation.bottomRight.x * imageWidth),
+                     "y": Double((1 - observation.bottomRight.y) * imageHeight)],
+                    ["x": Double(observation.bottomLeft.x * imageWidth),
+                     "y": Double((1 - observation.bottomLeft.y) * imageHeight)]
+                ]
+                entries.append([
+                    "text": String(candidate.string[range]),
+                    "confidence": candidate.confidence,
+                    "points": points
+                ])
+            }
+            start = end
+        }
+        return entries
     }
 
     // Helper to validate if text looks meaningful (not just symbols/noise)
@@ -327,10 +551,18 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             guard let self = self else { return }
             let fileName = URL(fileURLWithPath: imagePath).lastPathComponent
 
+            guard FileManager.default.fileExists(atPath: imagePath) else {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "IMAGE_NOT_FOUND",
+                                       message: "Image file does not exist",
+                                       details: nil))
+                }
+                return
+            }
             guard let image = UIImage(contentsOfFile: imagePath) else {
                 MobileOcrPlugin.logDebug("hasText load failure for \(fileName)")
                 DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                    result(FlutterError(code: "IMAGE_DECODE_ERROR",
                                        message: "Failed to load image from path",
                                        details: nil))
                 }
@@ -353,7 +585,13 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 + " minConf=\(String(format: "%.2f", minConfidence))"
             )
 
-            let renderer = UIGraphicsImageRenderer(size: targetSize)
+            let rendererFormat = UIGraphicsImageRendererFormat.default()
+            rendererFormat.scale = 1.0
+            rendererFormat.opaque = false
+            let renderer = UIGraphicsImageRenderer(
+                size: targetSize,
+                format: rendererFormat
+            )
             let fixedImage = renderer.image { _ in
                 image.draw(in: CGRect(origin: .zero, size: targetSize))
             }
@@ -361,7 +599,7 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             guard let cgImage = fixedImage.cgImage else {
                 MobileOcrPlugin.logDebug("hasText CGImage missing for \(fileName)")
                 DispatchQueue.main.async {
-                    result(FlutterError(code: "IMAGE_LOAD_ERROR",
+                    result(FlutterError(code: "IMAGE_DECODE_ERROR",
                                        message: "Failed to get CGImage",
                                        details: nil))
                 }
@@ -375,12 +613,13 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             var rejectedByConfidence = 0
             var rejectedByValidation = 0
             var validationSamples: [String] = []
+            var callbackError: Error?
 
             // Use VNRecognizeTextRequest (same as detectText) instead of VNDetectTextRectanglesRequest
             // This ensures consistency between hasText and detectText
             let request = VNRecognizeTextRequest { (request, error) in
                 if let error = error {
-                    print("hasText - Text recognition error: \(error.localizedDescription)")
+                    callbackError = error
                     return
                 }
 
@@ -431,7 +670,9 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 request.revision = VNRecognizeTextRequestRevision3
                 configuredRevision = request.revision
             } else {
-                request.recognitionLanguages = ["en-US"]
+                request.recognitionLanguages = self.preferredRecognitionLanguages(
+                    for: request
+                )
             }
             MobileOcrPlugin.logDebug(
                 "hasText request configured file=\(fileName)"
@@ -449,6 +690,14 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 }
                 return
             }
+            if let callbackError = callbackError {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "DETECTION_ERROR",
+                                       message: "Text detection failed",
+                                       details: callbackError.localizedDescription))
+                }
+                return
+            }
             MobileOcrPlugin.logDebug(
                 "hasText finished file=\(fileName)"
                 + " observations=\(observationCount)"
@@ -463,6 +712,140 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
                 result(hasValidText)
             }
         })
+    }
+
+    private func downscaledCGImage(_ image: UIImage,
+                                   maxDimension: CGFloat) -> CGImage? {
+        guard let source = image.cgImage else { return nil }
+        let width = CGFloat(source.width)
+        let height = CGFloat(source.height)
+        let longestSide = max(width, height)
+        guard longestSide > maxDimension else { return source }
+
+        let scale = maxDimension / longestSide
+        let targetSize = CGSize(
+            width: max(1, (width * scale).rounded()),
+            height: max(1, (height * scale).rounded())
+        )
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1.0
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: targetSize, format: format)
+            .image { _ in
+                image.draw(in: CGRect(origin: .zero, size: targetSize))
+            }
+            .cgImage
+    }
+
+    private func preferredRecognitionLanguages(
+        for request: VNRecognizeTextRequest
+    ) -> [String] {
+        let supported = (try? VNRecognizeTextRequest.supportedRecognitionLanguages(
+            for: request.recognitionLevel,
+            revision: request.revision
+        )) ?? ["en-US"]
+        return RecognitionLanguageSelector.select(
+            preferredLanguages: Locale.preferredLanguages,
+            supportedLanguages: supported
+        )
+    }
+
+    private func handleCancelRequest(call: FlutterMethodCall,
+                                     result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let requestId = arguments["requestId"] as? String,
+              !requestId.isEmpty else {
+            result(FlutterError(code: "INVALID_ARGUMENT",
+                               message: "Request ID is required",
+                               details: nil))
+            return
+        }
+        requestLock.lock()
+        let requestState = activeRequests.removeValue(forKey: requestId)
+        requestState?.isCancelled = true
+        let request = requestState?.request
+        requestLock.unlock()
+        request?.cancel()
+        result(nil)
+    }
+
+    private func beginRequest(requestId: String?) -> RequestState? {
+        guard let requestId = requestId else { return nil }
+        let requestState = RequestState(id: requestId)
+        requestLock.lock()
+        let previous = activeRequests.updateValue(
+            requestState,
+            forKey: requestId
+        )
+        previous?.isCancelled = true
+        let previousRequest = previous?.request
+        requestLock.unlock()
+        previousRequest?.cancel()
+        return requestState
+    }
+
+    private func register(
+        _ request: VNRequest,
+        requestState: RequestState?
+    ) -> Bool {
+        guard let requestState = requestState else { return true }
+        requestLock.lock()
+        let canRegister = !requestState.isCancelled &&
+            activeRequests[requestState.id] === requestState
+        if canRegister {
+            requestState.request = request
+        }
+        requestLock.unlock()
+        return canRegister
+    }
+
+    private func isCancelled(_ requestState: RequestState?) -> Bool {
+        guard let requestState = requestState else { return false }
+        requestLock.lock()
+        let cancelled = requestState.isCancelled
+        requestLock.unlock()
+        return cancelled
+    }
+
+    private func stopIfCancelled(
+        _ requestState: RequestState?,
+        result: @escaping FlutterResult
+    ) -> Bool {
+        guard isCancelled(requestState) else { return false }
+        complete(requestState, result: result)
+        return true
+    }
+
+    private func complete(
+        _ requestState: RequestState?,
+        result: @escaping FlutterResult,
+        value: Any? = nil,
+        error: FlutterError? = nil
+    ) {
+        let wasCancelled = finishRequest(requestState)
+        DispatchQueue.main.async {
+            if wasCancelled {
+                result(FlutterError(code: "CANCELLED",
+                                   message: "OCR request was cancelled",
+                                   details: nil))
+            } else if let error = error {
+                result(error)
+            } else {
+                result(value)
+            }
+        }
+    }
+
+    private func finishRequest(_ requestState: RequestState?) -> Bool {
+        guard let requestState = requestState else { return false }
+        requestLock.lock()
+        if activeRequests[requestState.id] === requestState {
+            activeRequests.removeValue(forKey: requestState.id)
+        }
+        requestState.request = nil
+        let wasCancelled = requestState.isCancelled
+        requestLock.unlock()
+        return wasCancelled
     }
 
     private static func logDebug(_ message: String) {

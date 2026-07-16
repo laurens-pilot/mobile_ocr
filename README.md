@@ -15,6 +15,7 @@ identical.
 ## Features
 
 - Text detection (DB algorithm) with oriented bounding polygons
+- Detector-only region API for inexpensive interaction routing
 - Text recognition (SVTR_LCNet + CTC) mirroring PaddleOCR v5 behaviour
 - Text angle classification and auto-rotation for skewed crops
 - On-device processing with no network calls
@@ -42,21 +43,22 @@ import 'package:mobile_ocr/mobile_ocr_plugin.dart';
 // Create plugin instance
 final ocrPlugin = MobileOcr();
 
-// Android only: ensure ONNX models are cached locally (downloads on first run).
-// No-op on iOS because Vision ships with the OS.
+// Optional: prepare only the Android detector and check likely text regions.
+// Both calls are no-ops with respect to model downloads on iOS.
+await ocrPlugin.prepareModels(
+  components: {OcrModelComponent.detector},
+);
+final regionResult = await ocrPlugin.detectTextRegions(
+  imagePath: '/path/to/image.png',
+);
+
+// Prepare the full Android pipeline only when the user requests recognition.
 await ocrPlugin.prepareModels();
-
-// Optional quick check if the image contains high-confidence text (runs much faster than actual full text recognition)
-final hasText = await ocrPlugin.hasText(
+final result = await ocrPlugin.detectText(
   imagePath: '/path/to/image.png',
 );
 
-// Perform OCR by supplying an image path
-final textBlocks = await ocrPlugin.detectText(
-  imagePath: '/path/to/image.png',
-);
-
-for (final block in textBlocks) {
+for (final block in result.blocks) {
   print('Text: ${block.text}');
   print('Confidence: ${block.confidence}');
   print('Corners: ${block.points}');
@@ -121,17 +123,23 @@ TextOverlayWidget(
 )
 ```
 
-### Pre-check with hasText()
+### Detector-only pre-check
 
-Use `hasText()` as a fast gate before running full detection:
+Use `detectTextRegions()` when the UI needs a cheap spatial signal without
+recognizing text:
 
 ```dart
-final hasText = await ocrPlugin.hasText(imagePath: '/path/to/image.png');
-if (hasText) {
-  // Run full detection only when text is likely present
-  final blocks = await ocrPlugin.detectText(imagePath: '/path/to/image.png');
+final result = await ocrPlugin.detectTextRegions(
+  imagePath: '/path/to/image.png',
+);
+if (result.regions.isNotEmpty) {
+  // Route a gesture using the region polygons, then recognize on demand.
 }
 ```
+
+`hasText()` remains available for compatibility but is deprecated as a routing
+signal. It performs recognition on both platforms and requires the full Android
+model set.
 
 ## Example App
 

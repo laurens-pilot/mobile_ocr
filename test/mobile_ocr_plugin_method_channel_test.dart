@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile_ocr/mobile_ocr_plugin_method_channel.dart';
+import 'package:mobile_ocr/mobile_ocr_plugin.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -33,6 +34,32 @@ void main() {
               };
             case 'hasText':
               return true;
+            case 'detectTextRegions':
+              return {
+                'regions': [
+                  {
+                    'confidence': 0.75,
+                    'points': [
+                      {'x': 1.0, 'y': 2.0},
+                      {'x': 11.0, 'y': 2.0},
+                      {'x': 11.0, 'y': 7.0},
+                      {'x': 1.0, 'y': 7.0},
+                    ],
+                  },
+                ],
+                'imageWidth': 100,
+                'imageHeight': 200,
+              };
+            case 'getModelAvailability':
+              return {
+                'detectorReady': true,
+                'recognizerReady': false,
+                'version': 'test',
+              };
+            case 'prepareModels':
+              return {'isReady': true, 'version': 'test', 'modelPath': '/tmp'};
+            case 'cancelRequest':
+              return null;
             default:
               return null;
           }
@@ -64,5 +91,29 @@ void main() {
   test('hasText returns boolean result', () async {
     final result = await platform.hasText(imagePath: '/tmp/test.png');
     expect(result, isTrue);
+  });
+
+  test('detectTextRegions forwards path', () async {
+    final result = await platform.detectTextRegions(imagePath: '/tmp/test.png');
+    expect(result['regions'], hasLength(1));
+    expect(result['imageWidth'], 100);
+    expect(result['imageHeight'], 200);
+  });
+
+  test('getModelAvailability returns component readiness', () async {
+    final result = await platform.getModelAvailability();
+    expect(result['detectorReady'], isTrue);
+    expect(result['recognizerReady'], isFalse);
+  });
+
+  test('prepareModels accepts detector-only preparation', () async {
+    final result = await platform.prepareModels(
+      components: {OcrModelComponent.detector},
+    );
+    expect(result['isReady'], isTrue);
+  });
+
+  test('cancelRequest forwards request identifier', () async {
+    await platform.cancelRequest('request-1');
   });
 }
