@@ -710,30 +710,10 @@ public class MobileOcrPlugin: NSObject, FlutterPlugin {
             for: request.recognitionLevel,
             revision: request.revision
         )) ?? ["en-US"]
-        var selected: [String] = []
-        for preferred in Locale.preferredLanguages {
-            let languageCode = preferred.split(separator: "-").first.map(String.init)
-            let match = supported.first { supportedLanguage in
-                if supportedLanguage == preferred {
-                    return true
-                }
-                guard let languageCode = languageCode else { return false }
-                return supportedLanguage == languageCode ||
-                    supportedLanguage.hasPrefix("\(languageCode)-")
-            }
-            if let match = match, !selected.contains(match) {
-                selected.append(match)
-            }
-            if selected.count == 3 {
-                break
-            }
-        }
-        if selected.count < 3,
-           supported.contains("en-US"),
-           !selected.contains("en-US") {
-            selected.append("en-US")
-        }
-        return selected.isEmpty ? Array(supported.prefix(1)) : selected
+        return RecognitionLanguageSelector.select(
+            preferredLanguages: Locale.preferredLanguages,
+            supportedLanguages: supported
+        )
     }
 
     private func handleCancelRequest(call: FlutterMethodCall,
