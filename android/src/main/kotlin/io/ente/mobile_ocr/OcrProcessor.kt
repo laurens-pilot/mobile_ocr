@@ -116,10 +116,11 @@ class OcrProcessor(
     fun processImage(
         bitmap: Bitmap,
         includeAllConfidenceScores: Boolean = false,
-        checkCancellation: () -> Unit = {}
+        cancellationSignal: OnnxCancellationSignal? = null
     ): OcrResult {
+        val checkCancellation = { cancellationSignal?.ensureActive() }
         // Step 1: Text Detection
-        val detectionResult = detectText(bitmap)
+        val detectionResult = detectText(bitmap, cancellationSignal)
         checkCancellation()
 
         if (detectionResult.isEmpty()) {
@@ -150,13 +151,17 @@ class OcrProcessor(
                 aspectCandidates,
                 classificationMask,
                 rotationStates,
-                "angle_aspect"
+                "angle_aspect",
+                cancellationSignal
             )
         }
 
         // Step 3: Text recognition
         checkCancellation()
-        val recognitionResults = recognizeText(croppedImages).toMutableList()
+        val recognitionResults = recognizeText(
+            croppedImages,
+            cancellationSignal
+        ).toMutableList()
         checkCancellation()
 
         if (useAngleClassification && recognitionResults.isNotEmpty()) {
@@ -171,9 +176,13 @@ class OcrProcessor(
                     lowConfidenceIndices,
                     classificationMask,
                     rotationStates,
-                    "angle_confidence"
+                    "angle_confidence",
+                    cancellationSignal
                 )
-                val refreshed = recognizeText(lowConfidenceIndices.map { croppedImages[it] })
+                val refreshed = recognizeText(
+                    lowConfidenceIndices.map { croppedImages[it] },
+                    cancellationSignal
+                )
                 checkCancellation()
                 lowConfidenceIndices.forEachIndexed { refreshedIndex, originalIndex ->
                     val current = recognitionResults[originalIndex]
@@ -238,12 +247,19 @@ class OcrProcessor(
         }
     }
 
-    private fun detectText(bitmap: Bitmap): List<TextBox> {
-        val processor = TextDetector(detectionSession, ortEnv)
+    private fun detectText(
+        bitmap: Bitmap,
+        cancellationSignal: OnnxCancellationSignal?
+    ): List<TextBox> {
+        val processor = TextDetector(detectionSession, ortEnv, cancellationSignal)
         return processor.detect(bitmap)
     }
 
-    private fun recognizeCandidate(bitmap: Bitmap, box: TextBox): RecognitionResult? {
+    private fun recognizeCandidate(
+        bitmap: Bitmap,
+        box: TextBox,
+        cancellationSignal: OnnxCancellationSignal?
+    ): RecognitionResult? {
         val crop = cropTextRegion(bitmap, box)
         val crops = mutableListOf(crop)
         val classificationMask = BooleanArray(1)
@@ -258,11 +274,12 @@ class OcrProcessor(
                     aspectCandidates,
                     classificationMask,
                     rotationStates,
-                    "angle_aspect_quick"
+                    "angle_aspect_quick",
+                    cancellationSignal
                 )
             }
 
-            var recognitionResults = recognizeText(crops)
+            var recognitionResults = recognizeText(crops, cancellationSignal)
             if (useAngleClassification && recognitionResults.isNotEmpty()) {
                 val needsRetry = !classificationMask[0] && recognitionResults[0].confidence < LOW_CONFIDENCE_THRESHOLD
                 if (needsRetry) {
@@ -271,9 +288,10 @@ class OcrProcessor(
                         listOf(0),
                         classificationMask,
                         rotationStates,
-                        "angle_confidence_quick"
+                        "angle_confidence_quick",
+                        cancellationSignal
                     )
-                    val refreshed = recognizeText(crops)
+                    val refreshed = recognizeText(crops, cancellationSignal)
                     if (refreshed.isNotEmpty() && refreshed[0].confidence > recognitionResults[0].confidence) {
                         recognitionResults = refreshed
                     }
@@ -294,9 +312,14 @@ class OcrProcessor(
         bitmap: Bitmap,
         minimumDetectionConfidence: Float = 0.9f,
         recognitionThreshold: Float = MIN_RECOGNITION_SCORE,
-        checkCancellation: () -> Unit = {}
+        cancellationSignal: OnnxCancellationSignal? = null
     ): QuickCheckResult {
-        val processor = TextDetector(detectionSession, ortEnv)
+        val checkCancellation = { cancellationSignal?.ensureActive() }
+        val processor = TextDetector(
+            detectionSession,
+            ortEnv,
+            cancellationSignal
+        )
         val detectionSummary = processor.collectHighConfidenceDetections(
             bitmap = bitmap,
             minimumDetectionConfidence = minimumDetectionConfidence,
@@ -327,7 +350,11 @@ class OcrProcessor(
         for (candidate in detectionSummary.candidates) {
             checkCancellation()
             evaluated++
-            val recognition = recognizeCandidate(bitmap, candidate.box)
+            val recognition = recognizeCandidate(
+                bitmap,
+                candidate.box,
+                cancellationSignal
+            )
             if (recognition != null) {
                 if (recognition.confidence > bestRecognitionScore) {
                     bestRecognitionScore = recognition.confidence
@@ -367,7 +394,8 @@ class OcrProcessor(
         indices: List<Int>,
         classificationMask: BooleanArray,
         rotationStates: BooleanArray,
-        stageLabel: String
+        stageLabel: String,
+        cancellationSignal: OnnxCancellationSignal? = null
     ) {
         if (!useAngleClassification || indices.isEmpty()) {
             return
@@ -376,7 +404,7 @@ class OcrProcessor(
         val session = classificationSession
             ?: throw IllegalStateException("Angle classification requested but model not loaded")
 
-        val classifier = TextClassifier(session, ortEnv)
+        val classifier = TextClassifier(session, ortEnv, cancellationSignal)
         val subset = indices.map { images[it] }
         val outputs = classifier.classifyAndRotate(subset)
 
@@ -395,8 +423,16 @@ class OcrProcessor(
         }
     }
 
-    private fun recognizeText(images: List<Bitmap>): List<RecognitionResult> {
-        val recognizer = TextRecognizer(recognitionSession, ortEnv, characterDict)
+    private fun recognizeText(
+        images: List<Bitmap>,
+        cancellationSignal: OnnxCancellationSignal? = null
+    ): List<RecognitionResult> {
+        val recognizer = TextRecognizer(
+            recognitionSession,
+            ortEnv,
+            characterDict,
+            cancellationSignal
+        )
         return recognizer.recognize(images)
     }
 

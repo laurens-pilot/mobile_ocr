@@ -51,8 +51,29 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     true
   )
   private val activeTasks = AtomicInteger(0)
-  private val requestJobs = ConcurrentHashMap<String, Job>()
+  private val requestTasks = ConcurrentHashMap<String, ActiveRequest>()
+  private val activeRequests = ConcurrentHashMap.newKeySet<ActiveRequest>()
   @Volatile private var shuttingDown = false
+
+  private class ActiveRequest(
+    val cancellationSignal: OnnxCancellationSignal
+  ) {
+    private lateinit var job: Job
+
+    fun attach(job: Job) {
+      this.job = job
+      if (cancellationSignal.isCancelled) {
+        job.cancel()
+      }
+    }
+
+    fun cancel() {
+      cancellationSignal.cancel()
+      if (::job.isInitialized) {
+        job.cancel()
+      }
+    }
+  }
 
   private data class ImageCacheEntry(
     val cachedPath: String,
@@ -158,10 +179,14 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         val includeAllConfidenceScores = call.argument<Boolean>("includeAllConfidenceScores") ?: false
         val requestId = call.argument<String>("requestId")
 
-        launchRequest(requestId) {
+        launchRequest(requestId) { cancellationSignal ->
           try {
             val ocrResult = withContext(Dispatchers.IO) {
-              processImage(imagePath, includeAllConfidenceScores)
+              processImage(
+                imagePath,
+                includeAllConfidenceScores,
+                cancellationSignal
+              )
             }
             result.success(ocrResult)
           } catch (e: CancellationException) {
@@ -180,10 +205,10 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         }
 
         val requestId = call.argument<String>("requestId")
-        launchRequest(requestId) {
+        launchRequest(requestId) { cancellationSignal ->
           try {
             val regionResult = withContext(Dispatchers.IO) {
-              detectTextRegions(imagePath)
+              detectTextRegions(imagePath, cancellationSignal)
             }
             result.success(regionResult)
           } catch (e: CancellationException) {
@@ -200,7 +225,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
           result.error("INVALID_ARGUMENT", "Request ID is required", null)
           return
         }
-        requestJobs.remove(requestId)?.cancel()
+        requestTasks.remove(requestId)?.cancel()
         result.success(null)
       }
       "hasText" -> {
@@ -210,10 +235,14 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
           return
         }
 
-        mainScope.launch {
+        launchRequest(requestId = null) { cancellationSignal ->
           try {
             val detectionSummary = withContext(Dispatchers.IO) {
-              hasHighConfidenceText(imagePath, QUICK_DETECTION_MIN_SCORE)
+              hasHighConfidenceText(
+                imagePath,
+                QUICK_DETECTION_MIN_SCORE,
+                cancellationSignal
+              )
             }
             val threshold = String.format(Locale.US, "%.2f", QUICK_DETECTION_MIN_SCORE)
             val maxScore = detectionSummary.maxDetectionScore?.let {
@@ -269,30 +298,39 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
 
   private fun launchRequest(
     requestId: String?,
-    operation: suspend () -> Unit
+    operation: suspend (OnnxCancellationSignal) -> Unit
   ) {
-    val job = mainScope.launch(start = CoroutineStart.LAZY) {
-      try {
-        operation()
-      } finally {
-        if (requestId != null) {
-          requestJobs.remove(requestId, coroutineContext.job)
-        }
+    val cancellationSignal = OnnxCancellationSignal()
+    val activeRequest = ActiveRequest(cancellationSignal)
+    activeRequests.add(activeRequest)
+    if (requestId != null) {
+      requestTasks.put(requestId, activeRequest)?.cancel()
+    }
+    val job = mainScope.launch(start = CoroutineStart.UNDISPATCHED) {
+      operation(cancellationSignal)
+    }
+    activeRequest.attach(job)
+    job.invokeOnCompletion {
+      activeRequests.remove(activeRequest)
+      if (requestId != null) {
+        requestTasks.remove(requestId, activeRequest)
       }
     }
-    if (requestId != null) {
-      requestJobs.put(requestId, job)?.cancel()
-    }
-    job.start()
   }
 
-  private suspend fun processImage(imagePath: String, includeAllConfidenceScores: Boolean = false): Map<String, Any> {
+  private suspend fun processImage(
+    imagePath: String,
+    includeAllConfidenceScores: Boolean = false,
+    cancellationSignal: OnnxCancellationSignal? = null
+  ): Map<String, Any> {
     if (shuttingDown) {
       throw IllegalStateException("Plugin is shutting down")
     }
     activeTasks.incrementAndGet()
     try {
+      cancellationSignal?.ensureActive()
       val processor = getOrCreateProcessor()
+      cancellationSignal?.ensureActive()
 
       val file = java.io.File(imagePath)
       if (!file.exists()) {
@@ -304,19 +342,18 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         FULL_OCR_MAX_DIMENSION,
         FULL_OCR_MAX_PIXELS
       )
+      cancellationSignal?.ensureActive()
       val imageWidth = decoded.orientedWidth
       val imageHeight = decoded.orientedHeight
       val scaleX = imageWidth.toFloat() / decoded.bitmap.width
       val scaleY = imageHeight.toFloat() / decoded.bitmap.height
-      val requestJob = currentCoroutineContext()[Job]
 
       val ocrResults = try {
         processor.processImage(
           decoded.bitmap,
-          includeAllConfidenceScores
-        ) {
-          requestJob?.ensureActive()
-        }
+          includeAllConfidenceScores,
+          cancellationSignal
+        )
       } finally {
         if (!decoded.bitmap.isRecycled) {
           decoded.bitmap.recycle()
@@ -371,14 +408,17 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
 
   private suspend fun hasHighConfidenceText(
     imagePath: String,
-    minDetectionConfidence: Float
+    minDetectionConfidence: Float,
+    cancellationSignal: OnnxCancellationSignal? = null
   ): QuickCheckResult {
     if (shuttingDown) {
       throw IllegalStateException("Plugin is shutting down")
     }
     activeTasks.incrementAndGet()
     try {
+      cancellationSignal?.ensureActive()
       val processor = getOrCreateProcessor()
+      cancellationSignal?.ensureActive()
 
       val file = java.io.File(imagePath)
       if (!file.exists()) {
@@ -390,14 +430,13 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         REGION_MAX_DIMENSION,
         REGION_MAX_PIXELS
       )
-      val requestJob = currentCoroutineContext()[Job]
+      cancellationSignal?.ensureActive()
       return try {
         processor.hasHighConfidenceText(
           decoded.bitmap,
-          minDetectionConfidence
-        ) {
-          requestJob?.ensureActive()
-        }
+          minDetectionConfidence,
+          cancellationSignal = cancellationSignal
+        )
       } finally {
         if (!decoded.bitmap.isRecycled) {
           decoded.bitmap.recycle()
@@ -408,27 +447,36 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
     }
   }
 
-  private suspend fun detectTextRegions(imagePath: String): Map<String, Any> {
+  private suspend fun detectTextRegions(
+    imagePath: String,
+    cancellationSignal: OnnxCancellationSignal? = null
+  ): Map<String, Any> {
     if (shuttingDown) {
       throw IllegalStateException("Plugin is shutting down")
     }
     activeTasks.incrementAndGet()
     try {
+      cancellationSignal?.ensureActive()
       val file = File(imagePath)
       if (!file.exists()) {
         throw ImageNotFoundException(imagePath)
       }
       val detector = getOrCreateRegionDetector()
+      cancellationSignal?.ensureActive()
       val decoded = decodeImage(
         imagePath,
         REGION_MAX_DIMENSION,
         REGION_MAX_PIXELS
       )
+      cancellationSignal?.ensureActive()
       val scaleX = decoded.orientedWidth.toFloat() / decoded.bitmap.width
       val scaleY = decoded.orientedHeight.toFloat() / decoded.bitmap.height
 
       try {
-        val regions = detector.detect(decoded.bitmap).map { candidate ->
+        val regions = detector.detect(
+          decoded.bitmap,
+          cancellationSignal
+        ).map { candidate ->
           mapOf<String, Any>(
             "confidence" to candidate.score.toDouble(),
             "points" to candidate.box.points.map { point ->
@@ -629,8 +677,9 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
     channel.setMethodCallHandler(null)
     shuttingDown = true
+    activeRequests.forEach(ActiveRequest::cancel)
     mainScope.cancel()
-    requestJobs.clear()
+    requestTasks.clear()
     runBlocking {
       withTimeoutOrNull(5_000) {
         while (activeTasks.get() > 0) {
@@ -649,6 +698,7 @@ class MobileOcrPlugin: FlutterPlugin, MethodCallHandler {
         cachedModelFiles = null
       }
     }
+    activeRequests.clear()
     displayableImageCache.clear()
   }
 

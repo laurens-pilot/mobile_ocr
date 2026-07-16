@@ -20,7 +20,8 @@ data class DetectionStageSummary(
 
 class TextDetector(
     private val session: OrtSession,
-    private val ortEnv: OrtEnvironment
+    private val ortEnv: OrtEnvironment,
+    private val cancellationSignal: OnnxCancellationSignal? = null
 ) {
     companion object {
         private const val LIMIT_SIDE_LEN = 960
@@ -81,26 +82,26 @@ class TextDetector(
         bitmap: Bitmap,
         handler: (TextBox, Float) -> Boolean
     ) {
+        cancellationSignal?.ensureActive()
         val originalWidth = bitmap.width
         val originalHeight = bitmap.height
 
         val (inputTensor, resizedWidth, resizedHeight) = preprocessImage(bitmap)
 
-        var output: OnnxTensor? = null
         try {
             val inputs = mapOf("x" to inputTensor)
-            output = session.run(inputs)[0] as OnnxTensor
-
-            postprocessDetection(
-                output = output,
-                originalWidth = originalWidth,
-                originalHeight = originalHeight,
-                resizedWidth = resizedWidth,
-                resizedHeight = resizedHeight,
-                handler = handler
-            )
+            runOnnx(session, inputs, cancellationSignal).use { outputs ->
+                postprocessDetection(
+                    output = outputs[0] as OnnxTensor,
+                    originalWidth = originalWidth,
+                    originalHeight = originalHeight,
+                    resizedWidth = resizedWidth,
+                    resizedHeight = resizedHeight,
+                    handler = handler
+                )
+            }
+            cancellationSignal?.ensureActive()
         } finally {
-            output?.close()
             inputTensor.close()
         }
     }

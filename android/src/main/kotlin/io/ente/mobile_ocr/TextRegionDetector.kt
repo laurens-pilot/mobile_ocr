@@ -19,8 +19,11 @@ class TextRegionDetector(modelFiles: DetectionModelFiles) {
         sessionOptions
     )
 
-    fun detect(bitmap: Bitmap): List<DetectionCandidate> {
-        return TextDetector(detectionSession, ortEnv)
+    fun detect(
+        bitmap: Bitmap,
+        cancellationSignal: OnnxCancellationSignal? = null
+    ): List<DetectionCandidate> {
+        return TextDetector(detectionSession, ortEnv, cancellationSignal)
             .collectHighConfidenceDetections(
                 bitmap = bitmap,
                 minimumDetectionConfidence = MINIMUM_DETECTION_CONFIDENCE,

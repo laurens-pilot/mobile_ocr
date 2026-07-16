@@ -42,6 +42,25 @@ void main() {
       final availability = await plugin.getModelAvailability();
       expect(availability.detectorReady, isTrue);
 
+      const regionRequestId = 'native-smoke-region-cancel';
+      final regionCancellation = Stopwatch()..start();
+      final cancelledRegions = plugin.detectTextRegions(
+        imagePath: image.path,
+        requestId: regionRequestId,
+      );
+      await plugin.cancelRequest(regionRequestId);
+      await expectLater(
+        cancelledRegions,
+        throwsA(
+          isA<OcrException>().having(
+            (error) => error.code,
+            'code',
+            'CANCELLED',
+          ),
+        ),
+      );
+      regionCancellation.stop();
+
       final regionDetection = Stopwatch()..start();
       final regions = await plugin.detectTextRegions(imagePath: image.path);
       regionDetection.stop();
@@ -53,6 +72,25 @@ void main() {
       final fullStatus = await plugin.prepareModels();
       fullPreparation.stop();
       expect(fullStatus.isReady, isTrue);
+
+      const recognitionRequestId = 'native-smoke-recognition-cancel';
+      final recognitionCancellation = Stopwatch()..start();
+      final cancelledRecognition = plugin.detectText(
+        imagePath: image.path,
+        requestId: recognitionRequestId,
+      );
+      await plugin.cancelRequest(recognitionRequestId);
+      await expectLater(
+        cancelledRecognition,
+        throwsA(
+          isA<OcrException>().having(
+            (error) => error.code,
+            'code',
+            'CANCELLED',
+          ),
+        ),
+      );
+      recognitionCancellation.stop();
 
       final recognition = Stopwatch()..start();
       final result = await plugin.detectText(imagePath: image.path);
@@ -67,9 +105,11 @@ void main() {
       // ignore: avoid_print
       print(
         'OCR_SMOKE detectorPrepareMs=${detectorPreparation.elapsedMilliseconds} '
+        'regionCancelMs=${regionCancellation.elapsedMilliseconds} '
         'regionsMs=${regionDetection.elapsedMilliseconds} '
         'regionCount=${regions.regions.length} '
         'fullPrepareMs=${fullPreparation.elapsedMilliseconds} '
+        'recognitionCancelMs=${recognitionCancellation.elapsedMilliseconds} '
         'recognitionMs=${recognition.elapsedMilliseconds} '
         'blockCount=${result.blocks.length}',
       );
