@@ -212,6 +212,24 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
   }
 
   bool get _hasActiveSelection => _activeSelections.isNotEmpty;
+  bool get _isEntireTextSelected {
+    var selectableBlockCount = 0;
+    for (final index in _blockOrder) {
+      final _BlockVisual? visual = _blockVisuals[index];
+      if (visual == null || visual.characterCount == 0) {
+        continue;
+      }
+      selectableBlockCount++;
+      final TextSelection? selection = _activeSelections[index];
+      if (selection == null ||
+          selection.start != 0 ||
+          selection.end != visual.characterCount) {
+        return false;
+      }
+    }
+    return selectableBlockCount > 0;
+  }
+
   bool get _isPanFirstWhileZoomed =>
       widget.isImageZoomed &&
       widget.zoomedInteractionPolicy == ZoomedInteractionPolicy.panFirst;
@@ -899,22 +917,33 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
       minLeft,
       viewportSceneRect.right - sceneSize.width - sceneMargin,
     );
-    final double left = (selectionBounds.center.dx - (sceneSize.width / 2))
-        .clamp(minLeft, maxLeft);
+    final bool centerInViewport = _isEntireTextSelected;
+    final double horizontalCenter = centerInViewport
+        ? viewportSceneRect.center.dx
+        : selectionBounds.center.dx;
+    final double left = (horizontalCenter - (sceneSize.width / 2)).clamp(
+      minLeft,
+      maxLeft,
+    );
 
     final double minTop = viewportSceneRect.top + sceneMargin;
     final double maxTop = max(
       minTop,
       viewportSceneRect.bottom - sceneSize.height - sceneMargin,
     );
-    final double preferredTop =
-        selectionBounds.top - sceneSpacing - sceneSize.height;
-    final double fallbackTop = selectionBounds.bottom + sceneSpacing;
-    final bool fitsAbove = preferredTop >= minTop;
-    final double top = (fitsAbove ? preferredTop : fallbackTop).clamp(
-      minTop,
-      maxTop,
-    );
+    late final double top;
+    if (centerInViewport) {
+      top = (viewportSceneRect.center.dy - (sceneSize.height / 2)).clamp(
+        minTop,
+        maxTop,
+      );
+    } else {
+      final double preferredTop =
+          selectionBounds.top - sceneSpacing - sceneSize.height;
+      final double fallbackTop = selectionBounds.bottom + sceneSpacing;
+      final bool fitsAbove = preferredTop >= minTop;
+      top = (fitsAbove ? preferredTop : fallbackTop).clamp(minTop, maxTop);
+    }
 
     return _ToolbarLayout(
       sceneRect: Rect.fromLTWH(left, top, sceneSize.width, sceneSize.height),
@@ -931,11 +960,6 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
     );
   }
 
-  bool _isScenePointInSelectedRegion(Offset scenePoint) {
-    final Rect? selectionBounds = _selectedRegionBounds();
-    return selectionBounds != null && selectionBounds.contains(scenePoint);
-  }
-
   bool _isScenePointOnToolbar(Offset scenePoint) {
     final BoxConstraints? constraints = _lastConstraints;
     if (constraints == null) {
@@ -947,8 +971,7 @@ class _TextOverlayWidgetState extends State<TextOverlayWidget> {
 
   bool _isScenePointOnInteractiveSelectionUi(Offset scenePoint) {
     return _isScenePointOnHandle(scenePoint) ||
-        _isScenePointOnToolbar(scenePoint) ||
-        _isScenePointInSelectedRegion(scenePoint);
+        _isScenePointOnToolbar(scenePoint);
   }
 
   bool _isGlobalPointOnSelectableText(Offset globalPosition) {
